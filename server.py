@@ -365,9 +365,44 @@ async def chat_stream_endpoint(req: ChatStreamRequest):
 # ---------------------------------------------------------------------------
 # OCR Endpoint & Intelligent Column-Aware Formatter
 # ---------------------------------------------------------------------------
+def group_boxes_into_lines(boxes, y_threshold=14):
+    """
+    Groups bounding boxes that share approximately the same vertical line (Y).
+    Sorts words horizontally (X left-to-right) and joins them with spaces into full sentences.
+    Prevents single-word vertical fragmentation.
+    """
+    if not boxes:
+        return []
+    
+    # Sort boxes primarily by Y
+    boxes = sorted(boxes, key=lambda b: (b[0], b[1]))
+    
+    lines = []
+    current_line = []
+    current_y = None
+
+    for min_y, min_x, text in boxes:
+        if current_y is None or abs(min_y - current_y) <= y_threshold:
+            current_line.append((min_x, text))
+            if current_y is None:
+                current_y = min_y
+        else:
+            # Sort words on this line from left to right
+            current_line.sort(key=lambda item: item[0])
+            line_str = " ".join([item[1] for item in current_line])
+            lines.append(line_str)
+            current_line = [(min_x, text)]
+            current_y = min_y
+
+    if current_line:
+        current_line.sort(key=lambda item: item[0])
+        lines.append(" ".join([item[1] for item in current_line]))
+
+    return lines
+
 def format_ocr_results(results, img_width=None):
     """
-    Sorts and formats EasyOCR results with column-awareness and smart spacing.
+    Sorts and formats EasyOCR results with column-awareness, horizontal sentence assembly, and smart spacing.
     Prevents two-column pages from horizontally interweaving into a messy wall of text.
     """
     import re
@@ -395,32 +430,28 @@ def format_ocr_results(results, img_width=None):
 
         # Spans across middle significantly (like header title)
         if min_x < mid_x * 0.75 and max_x > mid_x * 1.25:
-            full_boxes.append((min_y, clean_text))
+            full_boxes.append((min_y, min_x, clean_text))
         elif max_x < mid_x * 1.05:
-            left_boxes.append((min_y, clean_text))
+            left_boxes.append((min_y, min_x, clean_text))
         elif min_x > mid_x * 0.95:
-            right_boxes.append((min_y, clean_text))
+            right_boxes.append((min_y, min_x, clean_text))
         else:
             if (min_x + max_x) / 2.0 < mid_x:
-                left_boxes.append((min_y, clean_text))
+                left_boxes.append((min_y, min_x, clean_text))
             else:
-                right_boxes.append((min_y, clean_text))
+                right_boxes.append((min_y, min_x, clean_text))
 
     total_col_boxes = len(left_boxes) + len(right_boxes)
     if total_col_boxes > 5 and (len(left_boxes) / total_col_boxes) > 0.2 and (len(right_boxes) / total_col_boxes) > 0.2:
-        full_boxes.sort(key=lambda x: x[0])
-        left_boxes.sort(key=lambda x: x[0])
-        right_boxes.sort(key=lambda x: x[0])
-
-        ordered_texts = [t for _, t in full_boxes]
+        ordered_texts = group_boxes_into_lines(full_boxes)
         if ordered_texts:
             ordered_texts.append("\n--- [কলাম ১] ---\n")
-        ordered_texts.extend([t for _, t in left_boxes])
+        ordered_texts.extend(group_boxes_into_lines(left_boxes))
         ordered_texts.append("\n--- [কলাম ২] ---\n")
-        ordered_texts.extend([t for _, t in right_boxes])
+        ordered_texts.extend(group_boxes_into_lines(right_boxes))
     else:
-        all_sorted = sorted(results, key=lambda r: min(pt[1] for pt in r[0]))
-        ordered_texts = [r[1].strip() for r in all_sorted if r[1].strip()]
+        all_boxes = [(min(pt[1] for pt in r[0]), min(pt[0] for pt in r[0]), r[1].strip()) for r in results if r[1].strip()]
+        ordered_texts = group_boxes_into_lines(all_boxes)
 
     # Smart paragraph formation
     formatted_lines = []

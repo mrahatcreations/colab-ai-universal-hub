@@ -172,6 +172,7 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
   const [isAiFormatting, setIsAiFormatting] = useState(false);
   const [autoAiProofread, setAutoAiProofread] = useState(true);
   const [twoColumnMode, setTwoColumnMode] = useState(true); // Physical 2-column image separation
+  const [aiRevisionStatus, setAiRevisionStatus] = useState(null); // Active revision status
   
   const [languages, setLanguages] = useState("en,bn");
   const [copied, setCopied] = useState(false);
@@ -452,6 +453,79 @@ UNIVERSAL COGNITIVE & EDITORIAL RULES:
 7. PURE CLEAN OUTPUT:
    - Output ONLY the finished Markdown text. Do NOT output any internal chain-of-thought, conversation, or meta-notes.`;
 
+    // Secondary Revision & Proofreading Pass
+    const runRevisionPass = async (textToRevise) => {
+      if (!textToRevise || textToRevise.trim().length < 30) return;
+      setAiRevisionStatus("🔍 শব্দ-বানান যাচাই ও রিভিশন চলছে...");
+
+      const revisionPrompt = `You are a Chief Academic Proofreader and Bengali Language Specialist.
+Carefully inspect every single word and character in this transcribed question bank page.
+
+REVISION RULES:
+1. WORD-BY-WORD SPELLING & CONJUNCT CORRECTION:
+   - Check every word against standard Bengali Academy spelling.
+   - Reconstruct all broken Bengali conjuncts (যুক্তবর্ণ), missing vowel diacritics, and split/merged words.
+2. PRESERVE STRUCTURE:
+   - Keep question numbers (### 🔹 প্রশ্ন [নম্বর]), options (- **(A)** ...), answers (> 💡 **উত্তর:**) and explanations (> 📖 **ব্যাখ্যা:**) completely intact.
+3. OUTPUT ONLY the final, 100% verified and corrected Markdown text.`;
+
+      try {
+        const revRes = await fetch(`${apiBase}/api/chat/stream`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            messages: [
+              { role: "system", content: revisionPrompt },
+              { role: "user", content: `Carefully inspect and revise every word spelling in this page:\n\n${textToRevise}` }
+            ],
+            max_new_tokens: 2048,
+            temperature: 0.1
+          }),
+          signal: abortControllerRef.current?.signal
+        });
+
+        if (revRes.ok) {
+          const revReader = revRes.body.getReader();
+          const revDecoder = new TextDecoder("utf-8");
+          let revAccumulator = "";
+
+          while (true) {
+            const { done, value } = await revReader.read();
+            if (done) break;
+            const chunkStr = revDecoder.decode(value, { stream: true });
+            const lines = chunkStr.split("\n");
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (trimmed.startsWith("data: ")) {
+                const dataStr = trimmed.slice(6).trim();
+                if (dataStr === "[DONE]") break;
+                try {
+                  const parsed = JSON.parse(dataStr);
+                  if (parsed.token) {
+                    revAccumulator += parsed.token;
+                    setPageResults(prev => ({
+                      ...prev,
+                      [pageKey]: extractCleanOutput(revAccumulator)
+                    }));
+                  }
+                } catch {
+                  revAccumulator += dataStr;
+                  setPageResults(prev => ({
+                    ...prev,
+                    [pageKey]: extractCleanOutput(revAccumulator)
+                  }));
+                }
+              }
+            }
+          }
+        }
+      } catch (rErr) {
+        console.warn("Revision pass skipped:", rErr);
+      } finally {
+        setAiRevisionStatus(null);
+      }
+    };
+
     // 1. Direct Multimodal Vision Model (Qwen2.5-VL) if page image is available
     if (pageData?.blob) {
       try {
@@ -499,6 +573,12 @@ UNIVERSAL COGNITIVE & EDITORIAL RULES:
               }
             }
           }
+
+          // Trigger Pass 2: Word-by-word Revision
+          const finalVisionPass = extractCleanOutput(vAccumulator);
+          if (finalVisionPass && finalVisionPass.length > 30) {
+            await runRevisionPass(finalVisionPass);
+          }
           return;
         }
       } catch (err) {
@@ -530,8 +610,6 @@ UNIVERSAL COGNITIVE & EDITORIAL RULES:
       const decoder = new TextDecoder("utf-8");
       let streamAccumulator = "";
 
-
-
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -562,6 +640,12 @@ UNIVERSAL COGNITIVE & EDITORIAL RULES:
             }
           }
         }
+      }
+
+      // Trigger Pass 2: Word-by-word Revision
+      const finalTextPass = extractCleanOutput(streamAccumulator);
+      if (finalTextPass && finalTextPass.length > 30) {
+        await runRevisionPass(finalTextPass);
       }
     } catch (err) {
       console.error(err);
@@ -976,15 +1060,23 @@ UNIVERSAL COGNITIVE & EDITORIAL RULES:
 
                 {/* AI Polish & Actions */}
                 <div className="flex items-center gap-1.5">
+                  {/* Revision Status Badge */}
+                  {aiRevisionStatus && (
+                    <span className="px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-300 text-[11px] font-medium border border-amber-500/40 flex items-center gap-1.5 animate-pulse shadow-sm">
+                      <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                      <span>{aiRevisionStatus}</span>
+                    </span>
+                  )}
+
                   {/* Magic AI Smart Clean Button */}
                   <button
                     onClick={handleAiFormat}
                     disabled={!getActiveText() || isAiFormatting}
                     className="px-2.5 py-1 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-medium flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-30"
-                    title="DeepSeek AI দিয়ে বানান ঠিক করে সুন্দর প্রশ্ন ও টেবিলে সাজান"
+                    title="DeepSeek / Qwen AI দিয়ে বানান ঠিক করে সুন্দর প্রশ্ন ও টেবিলে সাজান"
                   >
                     <Wand2 className={`w-3.5 h-3.5 ${isAiFormatting ? 'animate-spin' : ''}`} />
-                    <span>{isAiFormatting ? "সাজানো হচ্ছে..." : "✨ AI দিয়ে সাজান"}</span>
+                    <span>{isAiFormatting ? (aiRevisionStatus ? "রিভিশন হচ্ছে..." : "সাজানো হচ্ছে...") : "✨ AI দিয়ে সাজান"}</span>
                   </button>
 
                   <button

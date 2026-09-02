@@ -5,6 +5,42 @@ import {
 } from 'lucide-react';
 import { getApiBase } from '../config';
 
+// Featured & Recommended 1-Click Models optimized for T4 GPU
+const FEATURED_MODELS = [
+  {
+    id: "unsloth/Qwen2.5-VL-7B-Instruct-bnb-4bit",
+    name: "Qwen 2.5 VL (7B Vision & Layout)",
+    badge: "🌟 ২-কলাম বই ও ভিশন",
+    badgeColor: "bg-emerald-500/10 text-emerald-400 border-emerald-500/30",
+    desc: "বইয়ের ২-কলাম পেজ, চার্ট ও বাংলা যুক্তবর্ণ সরাসরি ছবি দেখে নির্ভুলভাবে পড়ার জন্য এক নম্বর ভিশন মডেল।",
+    vram: "~5.5 GB VRAM"
+  },
+  {
+    id: "unsloth/Qwen2.5-7B-Instruct-bnb-4bit",
+    name: "Qwen 2.5 Instruct (7B Multilingual)",
+    badge: "বাংলা ব্যাকরণ ও প্রশ্নব্যাংক",
+    badgeColor: "bg-sky-500/10 text-sky-400 border-sky-500/30",
+    desc: "বাংলা ভাষা ও পরীক্ষার ফরম্যাটের জন্য বিশ্বের #১ টেক্সট মডেল (সরাসরি দ্রুত আউটপুট)।",
+    vram: "~4.8 GB VRAM"
+  },
+  {
+    id: "unsloth/DeepSeek-R1-Distill-Qwen-7B-bnb-4bit",
+    name: "DeepSeek R1 (7B Reasoning)",
+    badge: "ডিপ রিজনিং",
+    badgeColor: "bg-purple-500/10 text-purple-400 border-purple-500/30",
+    desc: "জটিল প্রশ্নের গভীর যুক্তি ও বিশ্লেষণ করার জন্য শক্তিশালী রিজনিং ইঞ্জিন।",
+    vram: "~5.2 GB VRAM"
+  },
+  {
+    id: "unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit",
+    name: "Llama 3.1 Instruct (8B Meta)",
+    badge: "সুপারফাস্ট",
+    badgeColor: "bg-amber-500/10 text-amber-400 border-amber-500/30",
+    desc: "মেটার অত্যন্ত দ্রুতগতির এবং স্থিতিশীল সর্বজনীন ভাষা মডেল।",
+    vram: "~5.4 GB VRAM"
+  }
+];
+
 export default function ModelHubModal({ 
   isOpen, 
   onClose, 
@@ -236,27 +272,37 @@ export default function ModelHubModal({
               )}
             </div>
 
-            {/* Model List */}
-            <div className="space-y-2">
-              {downloadedModels.length === 0 ? (
-                <div className="p-8 text-center text-xs text-neutral-500 italic bg-[#171717] rounded-xl border border-[#2b2b2b]">
-                  ডিস্কে কোনো মডেল পাওয়া যায়নি। 'Hugging Face সার্চ' ট্যাব থেকে মডেল ডাউনলোড করুন।
-                </div>
-              ) : (
-                downloadedModels.map(m => {
-                  const isActive = activeModel === m.id;
+            {/* Featured / Recommended Models */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between text-xs text-neutral-400 px-1 font-medium">
+                <span className="flex items-center gap-1.5 text-white">
+                  <Zap className="w-3.5 h-3.5 text-amber-400" />
+                  <span>প্রস্তাবিত মডেলসমূহ (১-ক্লিকে লোড করুন)</span>
+                </span>
+                <span className="text-[10px] text-neutral-500">স্বয়ংক্রিয়ভাবে ডাউনলোড ও রান হবে</span>
+              </div>
+
+              <div className="grid grid-cols-1 gap-2.5">
+                {FEATURED_MODELS.map(fm => {
+                  const isActive = activeModel === fm.id;
                   return (
                     <div
-                      key={m.folder}
+                      key={fm.id}
                       className={`p-3.5 rounded-xl border flex items-center justify-between gap-4 transition-all ${
                         isActive 
-                          ? "bg-sky-950/20 border-sky-500/40" 
+                          ? "bg-emerald-950/20 border-emerald-500/40 shadow-sm" 
                           : "bg-[#171717] border-[#2b2b2b] hover:border-neutral-700"
                       }`}
                     >
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold text-xs text-white truncate">{m.id}</span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-semibold text-xs text-white">{fm.name}</span>
+                          <span className={`text-[10px] px-2 py-0.5 rounded-full border ${fm.badgeColor}`}>
+                            {fm.badge}
+                          </span>
+                          <span className="text-[10px] text-neutral-500 font-mono bg-[#222] px-1.5 py-0.5 rounded border border-[#333]">
+                            {fm.vram}
+                          </span>
                           {isActive && (
                             <span className="bg-emerald-500/20 text-emerald-400 text-[10px] font-mono px-2 py-0.5 rounded-full flex items-center gap-1">
                               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
@@ -264,40 +310,90 @@ export default function ModelHubModal({
                             </span>
                           )}
                         </div>
-                        {m.downloaded_at && (
-                          <div className="text-[10px] text-neutral-500 font-mono mt-0.5">
-                            ডাউনলোড: {m.downloaded_at}
-                          </div>
-                        )}
+                        <p className="text-[11px] text-neutral-400 mt-1 leading-relaxed">{fm.desc}</p>
+                        <div className="text-[10px] text-neutral-500 font-mono mt-1 truncate">
+                          Repo: {fm.id}
+                        </div>
                       </div>
 
-                      <div className="flex items-center gap-2 shrink-0">
+                      <div className="shrink-0">
                         <button
-                          onClick={() => handleLoadModel(m.id)}
+                          onClick={() => handleLoadModel(fm.id)}
                           disabled={isLoading || isActive}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all ${
+                          className={`px-3.5 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all ${
                             isActive 
                               ? "bg-neutral-800 text-neutral-500 cursor-default" 
-                              : "bg-sky-600 hover:bg-sky-500 text-white shadow-sm"
+                              : "bg-emerald-600 hover:bg-emerald-500 text-white shadow-md hover:scale-[1.02]"
                           }`}
                         >
-                          {isLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-                          <span>{isActive ? "রানিং আছে" : "চালান (Run)"}</span>
-                        </button>
-
-                        <button
-                          onClick={() => handleDeleteModel(m.folder)}
-                          title="ডিস্ক থেকে মুছুন"
-                          className="p-1.5 rounded-lg text-neutral-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
-                        >
-                          <Trash2 className="w-4 h-4" />
+                          {isLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5 fill-current" />}
+                          <span>{isActive ? "রানিং আছে" : "লোড করুন (Load)"}</span>
                         </button>
                       </div>
                     </div>
                   );
-                })
-              )}
+                })}
+              </div>
             </div>
+
+            {/* Downloaded Models on Disk */}
+            {downloadedModels.length > 0 && (
+              <div className="space-y-3 pt-2">
+                <div className="text-xs text-neutral-400 px-1 font-medium flex items-center gap-1.5">
+                  <HardDrive className="w-3.5 h-3.5 text-sky-400" />
+                  <span>ডিস্কে আগে থেকে ডাউনলোড করা মডেল ({downloadedModels.length})</span>
+                </div>
+                <div className="space-y-2">
+                  {downloadedModels.map(m => {
+                    const isActive = activeModel === m.id;
+                    return (
+                      <div
+                        key={m.folder}
+                        className={`p-3 rounded-xl border flex items-center justify-between gap-4 transition-all ${
+                          isActive 
+                            ? "bg-sky-950/20 border-sky-500/40" 
+                            : "bg-[#171717] border-[#2b2b2b] hover:border-neutral-700"
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-xs text-white truncate">{m.id}</span>
+                            {isActive && (
+                              <span className="bg-emerald-500/20 text-emerald-400 text-[10px] font-mono px-2 py-0.5 rounded-full">
+                                Active
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            onClick={() => handleLoadModel(m.id)}
+                            disabled={isLoading || isActive}
+                            className={`px-3 py-1 rounded-lg text-xs font-medium flex items-center gap-1 ${
+                              isActive 
+                                ? "bg-neutral-800 text-neutral-500" 
+                                : "bg-sky-600 hover:bg-sky-500 text-white"
+                            }`}
+                          >
+                            <Zap className="w-3.5 h-3.5" />
+                            <span>{isActive ? "রানিং" : "চালান"}</span>
+                          </button>
+                          <button
+                            onClick={() => handleDeleteModel(m.folder)}
+                            disabled={isLoading}
+                            className="p-1.5 rounded-lg text-neutral-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                            title="মুছে ফেলুন"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
 

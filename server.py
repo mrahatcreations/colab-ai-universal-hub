@@ -126,6 +126,17 @@ def health():
         "timestamp": time.time()
     }
 
+@app.on_event("startup")
+def on_startup():
+    auto_model = os.getenv("AUTO_LOAD_MODEL", "").strip()
+    if auto_model:
+        logger.info(f"Auto-loading model upon startup: {auto_model}")
+        try:
+            load_model_endpoint(LoadModelRequest(repo_id=auto_model, quantization="4bit"))
+            logger.info(f"Model '{auto_model}' successfully loaded upon startup!")
+        except Exception as e:
+            logger.error(f"Failed to auto-load model '{auto_model}': {e}")
+
 @app.get("/api/status")
 def get_status():
     return {

@@ -327,37 +327,11 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
       try {
         let finalPageText = "";
 
-        if (twoColumnMode) {
-          // Physical 2-column image splitting: Left Half & Right Half
-          const { leftBlob, rightBlob } = await splitPageIntoColumns(pageData.blob);
-
-          // 1. Scan Column 1 (Left Half)
-          const form1 = new FormData();
-          form1.append("file", leftBlob, `page_${p}_col1.png`);
-          form1.append("languages", languages);
-          const res1 = await fetch(`${apiBase}/api/ocr`, {
-            method: "POST",
-            body: form1,
-            signal: abortControllerRef.current.signal
-          });
-          const data1 = res1.ok ? await res1.json() : { text: "" };
-          const col1Text = formatBookPageContent(data1.text || "");
-
-          // 2. Scan Column 2 (Right Half)
-          const form2 = new FormData();
-          form2.append("file", rightBlob, `page_${p}_col2.png`);
-          form2.append("languages", languages);
-          const res2 = await fetch(`${apiBase}/api/ocr`, {
-            method: "POST",
-            body: form2,
-            signal: abortControllerRef.current.signal
-          });
-          const data2 = res2.ok ? await res2.json() : { text: "" };
-          const col2Text = formatBookPageContent(data2.text || "");
-
-          finalPageText = `## 📌 [কলাম ১]\n\n${col1Text}\n\n---\n\n## 📌 [কলাম ২]\n\n${col2Text}`;
+        // 1. If Auto AI Proofread is active, let Vision / AI model process the full page organically
+        if (autoAiProofread && pageData?.blob) {
+          await formatTextWithAi("", p);
         } else {
-          // Standard full-page scan
+          // Standard full-page scan without cutting or artificial column dividing
           const formData = new FormData();
           formData.append("file", pageData.blob, `page_${p}.png`);
           formData.append("languages", languages);
@@ -372,16 +346,11 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
             const data = await res.json();
             finalPageText = formatBookPageContent(data.text || "");
           }
-        }
 
-        setPageResults(prev => ({
-          ...prev,
-          [p]: finalPageText || "কোনো টেক্সট পাওয়া যায়নি।"
-        }));
-
-        // Trigger Automated AI Formatting & Spelling Revision Pass
-        if (autoAiProofread && (finalPageText || pageData?.blob)) {
-          await formatTextWithAi(finalPageText, p);
+          setPageResults(prev => ({
+            ...prev,
+            [p]: finalPageText || "কোনো টেক্সট পাওয়া যায়নি।"
+          }));
         }
 
         setScanProgress({ done: i + 1, total: targetPages.length });
@@ -406,13 +375,13 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
 
   // Universal Fast AI Document Refinement & Proofreading Engine
   const formatTextWithAi = async (textToFormat, targetPageNum = null) => {
-    if (!textToFormat || !textToFormat.trim()) return;
+    const pageKey = targetPageNum || currentPage;
+    const pageData = renderedPages[pageKey];
+    if (!textToFormat?.trim() && !pageData?.blob) return;
 
     setIsAiFormatting(true);
     setFormatTab("formatted");
 
-    const pageKey = targetPageNum || currentPage;
-    const pageData = renderedPages[pageKey];
     const apiBase = getApiBase();
 
     const academicPrompt = `You are an expert academic document transcriber and editorial proofreader specializing in university admission test question banks.
@@ -431,9 +400,11 @@ UNIVERSAL COGNITIVE & EDITORIAL RULES:
    - Automatically detect and heal broken conjuncts (যুক্তবর্ণ), disjointed vowel diacritics (হ্রস্ব-ই/দীর্ঘ-ঈ কার, য-ফলা, রেফ), OCR character confusions (ক/ত, ড়/র, ণ/ন, শ/ষ/স), and split/joined words.
    - Reconstruct any real literary reference, author, book, proverb, legal term, or historical entity accurately based on the surrounding context.
 
-3. TWO-COLUMN LAYOUT DISCIPLINE:
-   - When a page has two printed columns, transcribe Column 1 (Left) completely from top to bottom first.
-   - Then transcribe Column 2 (Right) from top to bottom.
+3. CONTENT-AWARE PUBLICATION LAYOUT (বিষয়ভিত্তিক বিন্যাস):
+   - Format the page cleanly according to its actual document type:
+     * Table of Contents (সূচিপত্র): Render with clear section headings and clean Markdown tables (| বিষয় | পৃষ্ঠা |).
+     * Questions / MCQs: Sequence all questions chronologically (১, ২, ৩...).
+     * NEVER output artificial divider tags like '## কলাম ১' or '--- [কলাম ২] ---'!
    - Completely ignore repeating running headers, footers, page numbers, and publisher advertisements/watermarks.
 
 4. STRICT MCQ OPTIONS ISOLATION:

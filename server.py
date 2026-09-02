@@ -193,27 +193,32 @@ def load_model_endpoint(req: LoadModelRequest):
             "trust_remote_code": True
         }
 
-        if torch.cuda.is_available():
-            load_kwargs["torch_dtype"] = torch.float16
-            try:
-                from transformers import BitsAndBytesConfig
-                if req.quantization == "4bit":
-                    load_kwargs["quantization_config"] = BitsAndBytesConfig(
-                        load_in_4bit=True,
-                        bnb_4bit_compute_dtype=torch.float16,
-                        bnb_4bit_quant_type="nf4",
-                        bnb_4bit_use_double_quant=True
-                    )
-                elif req.quantization == "8bit":
-                    load_kwargs["quantization_config"] = BitsAndBytesConfig(load_in_8bit=True)
-            except Exception:
-                if req.quantization == "4bit":
-                    load_kwargs["load_in_4bit"] = True
-                elif req.quantization == "8bit":
-                    load_kwargs["load_in_8bit"] = True
-
         is_vl = any(term in repo_id.lower() for term in ["vl", "vision"])
         processor = None
+
+        if torch.cuda.is_available():
+            load_kwargs["torch_dtype"] = torch.float16
+            # 3B vision models fit natively in T4 VRAM without quantization
+            needs_quant = (req.quantization in ["4bit", "8bit"]) and not ("3b" in repo_id.lower() and is_vl)
+            if needs_quant:
+                try:
+                    from transformers import BitsAndBytesConfig
+                    skip_mods = ["visual", "lm_head", "multi_modal_projector", "merger", "modality_projection"] if is_vl else None
+                    if req.quantization == "4bit":
+                        load_kwargs["quantization_config"] = BitsAndBytesConfig(
+                            load_in_4bit=True,
+                            bnb_4bit_compute_dtype=torch.float16,
+                            bnb_4bit_quant_type="nf4",
+                            bnb_4bit_use_double_quant=True,
+                            llm_int8_skip_modules=skip_mods
+                        )
+                    elif req.quantization == "8bit":
+                        load_kwargs["quantization_config"] = BitsAndBytesConfig(
+                            load_in_8bit=True,
+                            llm_int8_skip_modules=skip_mods
+                        )
+                except Exception as bnb_err:
+                    print(f"[!] BitsAndBytes config error: {bnb_err}", flush=True)
 
         if is_vl:
             try:

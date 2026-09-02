@@ -348,16 +348,19 @@ Core Instructions:
               const parsed = JSON.parse(dataStr);
               if (parsed.token) {
                 formattedAccumulator += parsed.token;
+                // Strip <think>...</think> reasoning tags for clean output
+                const cleanDisplay = formattedAccumulator.replace(/<think>[\s\S]*?<\/think>/gi, '').trimStart();
                 setPageResults(prev => ({
                   ...prev,
-                  [pageKey]: formattedAccumulator
+                  [pageKey]: cleanDisplay || formattedAccumulator
                 }));
               }
             } catch {
               formattedAccumulator += dataStr;
+              const cleanDisplay = formattedAccumulator.replace(/<think>[\s\S]*?<\/think>/gi, '').trimStart();
               setPageResults(prev => ({
                 ...prev,
-                [pageKey]: formattedAccumulator
+                [pageKey]: cleanDisplay || formattedAccumulator
               }));
             }
           }
@@ -824,7 +827,7 @@ Core Instructions:
                   </div>
                 ) : formatTab === "formatted" ? (
                   /* Editorial Smart Markdown View */
-                  <div className="flex-1 bg-[#141414] border border-[#2b2b2b] rounded-xl p-5 overflow-y-auto text-neutral-200 prose prose-invert max-w-none text-xs md:text-sm leading-relaxed space-y-3">
+                  <div className="flex-1 bg-[#141414] border border-[#2b2b2b] rounded-xl p-5 overflow-y-auto text-neutral-200 prose prose-invert max-w-none text-xs md:text-sm leading-relaxed space-y-3 whitespace-pre-line">
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
                       {getActiveText() + (isScanning ? "\n\n`[পেজ " + (currentScanningTarget || currentPage) + " স্ক্যানিং চলছে... ▍]`" : "")}
                     </ReactMarkdown>

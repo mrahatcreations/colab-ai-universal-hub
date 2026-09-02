@@ -363,8 +363,75 @@ async def chat_stream_endpoint(req: ChatStreamRequest):
         raise HTTPException(status_code=500, detail=f"Inference error: {str(e)}")
 
 # ---------------------------------------------------------------------------
-# OCR Endpoint
+# OCR Endpoint & Intelligent Column-Aware Formatter
 # ---------------------------------------------------------------------------
+def format_ocr_results(results, img_width=None):
+    """
+    Sorts and formats EasyOCR results with column-awareness and smart spacing.
+    Prevents two-column pages from horizontally interweaving into a messy wall of text.
+    """
+    import re
+    if not results:
+        return ""
+
+    if img_width is None:
+        all_xs = [pt[0] for r in results for pt in r[0]]
+        img_width = max(all_xs) if all_xs else 1000
+
+    mid_x = img_width / 2.0
+    left_boxes = []
+    right_boxes = []
+    full_boxes = []
+
+    for r in results:
+        bbox, text, conf = r
+        clean_text = text.strip()
+        if not clean_text:
+            continue
+        xs = [pt[0] for pt in bbox]
+        ys = [pt[1] for pt in bbox]
+        min_x, max_x = min(xs), max(xs)
+        min_y = min(ys)
+
+        # Spans across middle significantly (like header title)
+        if min_x < mid_x * 0.75 and max_x > mid_x * 1.25:
+            full_boxes.append((min_y, clean_text))
+        elif max_x < mid_x * 1.05:
+            left_boxes.append((min_y, clean_text))
+        elif min_x > mid_x * 0.95:
+            right_boxes.append((min_y, clean_text))
+        else:
+            if (min_x + max_x) / 2.0 < mid_x:
+                left_boxes.append((min_y, clean_text))
+            else:
+                right_boxes.append((min_y, clean_text))
+
+    total_col_boxes = len(left_boxes) + len(right_boxes)
+    if total_col_boxes > 5 and (len(left_boxes) / total_col_boxes) > 0.2 and (len(right_boxes) / total_col_boxes) > 0.2:
+        full_boxes.sort(key=lambda x: x[0])
+        left_boxes.sort(key=lambda x: x[0])
+        right_boxes.sort(key=lambda x: x[0])
+
+        ordered_texts = [t for _, t in full_boxes]
+        if ordered_texts:
+            ordered_texts.append("\n--- [কলাম ১] ---\n")
+        ordered_texts.extend([t for _, t in left_boxes])
+        ordered_texts.append("\n--- [কলাম ২] ---\n")
+        ordered_texts.extend([t for _, t in right_boxes])
+    else:
+        all_sorted = sorted(results, key=lambda r: min(pt[1] for pt in r[0]))
+        ordered_texts = [r[1].strip() for r in all_sorted if r[1].strip()]
+
+    # Smart paragraph formation
+    formatted_lines = []
+    for line in ordered_texts:
+        if re.match(r"^(\d+[\.\)]|[A-D][\.\)]|উত্তর|ব্যাখ্যা|প্রশ্ন|বিষয়|সূচিপত্র)", line):
+            formatted_lines.append("\n" + line)
+        else:
+            formatted_lines.append(line)
+
+    return "\n".join(formatted_lines).strip()
+
 @app.post("/api/ocr")
 async def ocr_endpoint(
     file: UploadFile = File(...),
@@ -425,8 +492,7 @@ async def ocr_endpoint(
         else:
             # Single Image processing
             results = ocr_reader.readtext(file_bytes)
-            lines = [r[1] for r in results]
-            extracted_text = "\n".join(lines)
+            extracted_text = format_ocr_results(results)
 
             return {
                 "status": "success",
@@ -436,10 +502,10 @@ async def ocr_endpoint(
                 "pages": [{
                     "page_num": 1,
                     "text": extracted_text,
-                    "lines_count": len(lines)
+                    "lines_count": len(results)
                 }],
                 "text": extracted_text,
-                "lines_count": len(lines)
+                "lines_count": len(results)
             }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"OCR failed: {str(e)}")
@@ -515,8 +581,7 @@ async def ocr_single_page_endpoint(
             np_image = np.array(pil_image)
 
             results = ocr_reader.readtext(np_image)
-            lines = [r[1] for r in results]
-            text = "\n".join(lines)
+            text = format_ocr_results(results, img_width=np_image.shape[1])
 
             return {
                 "status": "success",
@@ -525,12 +590,11 @@ async def ocr_single_page_endpoint(
                 "page_num": target_idx + 1,
                 "total_pages": total_pages,
                 "text": text,
-                "lines_count": len(lines)
+                "lines_count": len(results)
             }
         else:
             results = ocr_reader.readtext(file_bytes)
-            lines = [r[1] for r in results]
-            text = "\n".join(lines)
+            text = format_ocr_results(results)
             return {
                 "status": "success",
                 "is_pdf": False,
@@ -538,7 +602,7 @@ async def ocr_single_page_endpoint(
                 "page_num": 1,
                 "total_pages": 1,
                 "text": text,
-                "lines_count": len(lines)
+                "lines_count": len(results)
             }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Page OCR failed: {str(e)}")

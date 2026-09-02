@@ -408,47 +408,49 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
     const pageData = renderedPages[pageKey];
     const apiBase = getApiBase();
 
-    const academicPrompt = `You are an expert academic document transcriber and editorial proofreader specializing in Bangladeshi university admission test question banks (DU B-Unit / Kha-Unit).
+    const academicPrompt = `You are an expert academic document transcriber and editorial proofreader specializing in university admission test question banks.
 Your task is to transform imperfect book pages or raw OCR into publication-ready, impeccably structured digital Markdown.
 
-STRICT EDITORIAL RULES:
-1. TWO-COLUMN LAYOUT DISCIPLINE:
+UNIVERSAL COGNITIVE & EDITORIAL RULES:
+1. STRICT SEQUENTIAL QUESTION NUMBERING (ক্রমিক নম্বর পুনরুদ্ধার):
+   - Every single question MUST have a clear sequential number: ### 🔹 প্রশ্ন [১/২/৩...]: [প্রশ্ন]
+   - If the raw text or book image dropped, blurred, or omitted a question number, intelligently infer and restore the correct chronological number based on the sequence of surrounding questions (e.g., if question 1 is followed by an unnumbered question before question 3, restore it as question 2).
+   - For written passages and sub-questions, use clear sub-numbering: #### 🔸 (ক), #### 🔸 (খ), etc.
+   - NEVER leave a question unnumbered or floating.
+
+2. DOMAIN-AGNOSTIC CONTEXTUAL CORRECTION (সার্বজনীন বোধগম্যতা ও বানান শুদ্ধিকরণ):
+   - Do NOT rely on any fixed keyword list. Apply your comprehensive contextual understanding across all academic domains (Bengali literature, grammar, world history, law, politics, science, geography, economics).
+   - Read the entire sentence syntax and subject context before deciding a word.
+   - Automatically detect and heal broken conjuncts (যুক্তবর্ণ), disjointed vowel diacritics (হ্রস্ব-ই/দীর্ঘ-ঈ কার, য-ফলা, রেফ), OCR character confusions (ক/ত, ড়/র, ণ/ন, শ/ষ/স), and split/joined words.
+   - Reconstruct any real literary reference, author, book, proverb, legal term, or historical entity accurately based on the surrounding context.
+
+3. TWO-COLUMN LAYOUT DISCIPLINE:
    - When a page has two printed columns, transcribe Column 1 (Left) completely from top to bottom first.
-   - Then transcribe Column 2 (Right) completely from top to bottom.
-   - Discard repeating page headers (e.g. 'প্রশ্নব্যাংক: কলা, আইন ও সামাজিক বিজ্ঞান অনুষদ'), footers, page numbers, and publisher watermarks/ads (e.g. 'প্যানাসিয়া পাবলিকেশন্স', 'তোমার অধ্যয়নের সহযোগী').
+   - Then transcribe Column 2 (Right) from top to bottom.
+   - Completely ignore repeating running headers, footers, page numbers, and publisher advertisements/watermarks.
 
-2. FLAWLESS BENGALI SPELLINGS & CONJUNCTS (যুক্তবর্ণ):
-   - Contextually correct all broken Bengali conjuncts, split words, and OCR corruptions (e.g., আখতারুজ্জামান ইলিয়াস, মুক্তিযুদ্ধ, গল্প, রোকেয়া সাখাওয়াত হোসেন, শরৎচন্দ্র চট্টোপাধ্যায়, রবীন্দ্রনাথ ঠাকুর, মাইকেল মধুসূদন দত্ত, ড. মুহাম্মদ ইউনূস, থ্রি-জিরো তত্ত্ব, সৈয়দা রিজওয়ানা হাসান, ফরিদা আখতার, শারমীন মুরশিদ, নূরজাহান বেগম, সৈয়দ রেফাত আহমেদ, বেনজির ভুট্টো, ইত্যাদি).
-   - Ensure 100% correct spelling, Dari (।), quotation marks, and grammar.
-
-3. STRICT MCQ OPTIONS FORMAT:
+4. STRICT MCQ OPTIONS ISOLATION:
    - EVERY option MUST be on its own separate line:
      - **(A)** [বিকল্প]
      - **(B)** [বিকল্প]
      - **(C)** [বিকল্প]
      - **(D)** [বিকল্প]
-   - NEVER combine multiple options into a single line (e.g., never write '- **A.** ... B ...').
+   - NEVER combine multiple options onto the same line, even if they were printed side-by-side in the original book.
 
-4. CLEAN ANSWER & EXPLANATION BLOCKS:
+5. CLEAN ANSWER & EXPLANATION BLOCKS:
    - Format Bengali answers as:
      > 💡 **উত্তর:** (A)
      > 📖 **ব্যাখ্যা:** [বিশদ ও নির্ভুল ব্যাকরণসম্মত ব্যাখ্যা]
    - Format English answers as:
      > 💡 **Ans:** (A)
      > 📖 **Expl:** [Clear grammatical explanation]
-   - Never output corrupted OCR artifacts like 'উব্র', 'উবর', 'ডওতর', 'ডবগর', 'ডতর', or 'Ans: এ'.
+   - Never output OCR corruption artifacts like 'উব্র', 'উবর', 'ডওতর', 'ডবগর', or 'Ans: এ'.
 
-5. TABLES FOR VOCABULARY & INDICES:
-   - For word meanings (শব্দার্থ), synonyms/antonyms, or index lists, ALWAYS render them as clean Markdown tables:
-     | শব্দ | অর্থ |
-     | :--- | :--- |
-     | সোপান | সিঁড়ি |
-     | কলেবর | দেহ, শরীর |
-     | অমানিশীথ | ঘোর অন্ধকার রাত |
-     | বসন | কাপড়, বস্ত্র |
+6. ELEGANT TABLES FOR VOCABULARY & INDICES:
+   - For word meanings (শব্দার্থ), antonyms/synonyms, or index lists, ALWAYS render them as clean Markdown tables with header and alignment.
 
-6. PURE CLEAN OUTPUT:
-   - Output ONLY the finished Markdown text. Do NOT include any conversational preamble, notes, or meta-comments.`;
+7. PURE CLEAN OUTPUT:
+   - Output ONLY the finished Markdown text. Do NOT output any internal chain-of-thought, conversation, or meta-notes.`;
 
     // 1. Direct Multimodal Vision Model (Qwen2.5-VL) if page image is available
     if (pageData?.blob) {

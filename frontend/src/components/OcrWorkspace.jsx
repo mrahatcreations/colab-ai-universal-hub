@@ -200,6 +200,7 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
 
     setIsScanning(true);
     setError(null);
+    setViewMode("all");
     setScanProgress({ done: 0, total: targetPages.length });
 
     abortControllerRef.current = new AbortController();
@@ -238,10 +239,25 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
 
         if (res.ok) {
           const data = await res.json();
-          setPageResults(prev => ({
-            ...prev,
-            [p]: data.text || ""
-          }));
+          const rawLines = (data.text || "").split("\n").filter(Boolean);
+          
+          if (rawLines.length === 0) {
+            setPageResults(prev => ({ ...prev, [p]: "কোনো টেক্সট পাওয়া যায়নি।" }));
+          } else {
+            let streamAccumulator = "";
+            for (let lineIdx = 0; lineIdx < rawLines.length; lineIdx++) {
+              if (abortControllerRef.current?.signal?.aborted) break;
+              streamAccumulator += (streamAccumulator ? "\n" : "") + rawLines[lineIdx];
+              
+              setPageResults(prev => ({
+                ...prev,
+                [p]: streamAccumulator
+              }));
+
+              // 35ms realistic typewriter streaming pace per line
+              await new Promise(r => setTimeout(r, 35));
+            }
+          }
           setScanProgress({ done: i + 1, total: targetPages.length });
         }
       } catch (err) {
@@ -667,19 +683,7 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
                     <AlertCircle className="w-4 h-4 shrink-0" />
                     <span>{error}</span>
                   </div>
-                ) : isScanning && !getActiveText() ? (
-                  <div className="flex-1 flex flex-col items-center justify-center text-center p-8 space-y-3">
-                    <div className="w-12 h-12 rounded-2xl bg-emerald-600/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
-                      <Loader2 className="w-6 h-6 animate-spin" />
-                    </div>
-                    <div className="text-sm font-medium text-white">
-                      পেজ {currentScanningTarget || currentPage} স্ক্যান করা হচ্ছে...
-                    </div>
-                    <div className="text-xs text-neutral-400 max-w-xs">
-                      T4 GPU দিয়ে বাংলা ও ইংরেজি অক্ষর ও যুক্তবর্ণ নিখুঁতভাবে এক্সট্রাক্ট করা হচ্ছে।
-                    </div>
-                  </div>
-                ) : !getActiveText() ? (
+                ) : !getActiveText() && !isScanning ? (
                   <div className="flex-1 flex flex-col items-center justify-center text-center p-8 text-neutral-500 space-y-3">
                     <div className="w-12 h-12 rounded-2xl bg-[#222] border border-[#333] flex items-center justify-center text-neutral-400">
                       <Sparkles className="w-6 h-6" />
@@ -690,12 +694,14 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
                     </div>
                   </div>
                 ) : (
-                  <textarea
-                    value={getActiveText()}
-                    readOnly
-                    placeholder="শনাক্তকৃত টেক্সট এখানে প্রদর্শিত হবে..."
-                    className="flex-1 w-full bg-[#131313] border border-[#2b2b2b] rounded-xl p-4 text-xs md:text-sm text-neutral-100 font-sans leading-relaxed resize-none focus:outline-none focus:border-emerald-500"
-                  />
+                  <div className="flex-1 flex flex-col relative h-full">
+                    <textarea
+                      value={getActiveText() + (isScanning ? "\n\n[পেজ " + (currentScanningTarget || currentPage) + " স্ক্যানিং চলছে... ▍]" : "")}
+                      readOnly
+                      placeholder="শনাক্তকৃত টেক্সট এখানে রিয়েল-টাইমে স্ট্রিম হবে..."
+                      className="flex-1 w-full bg-[#131313] border border-[#2b2b2b] rounded-xl p-4 text-xs md:text-sm text-neutral-100 font-sans leading-relaxed resize-none focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
                 )}
               </div>
 

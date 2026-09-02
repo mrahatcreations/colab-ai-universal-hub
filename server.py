@@ -1,3 +1,4 @@
+import os
 import gc
 import json
 import time
@@ -130,12 +131,12 @@ def health():
 def on_startup():
     auto_model = os.getenv("AUTO_LOAD_MODEL", "").strip()
     if auto_model:
-        logger.info(f"Auto-loading model upon startup: {auto_model}")
+        print(f"[*] Auto-loading model upon startup: {auto_model}...", flush=True)
         try:
             load_model_endpoint(LoadModelRequest(repo_id=auto_model, quantization="4bit"))
-            logger.info(f"Model '{auto_model}' successfully loaded upon startup!")
+            print(f"[+] Model '{auto_model}' successfully loaded upon startup!", flush=True)
         except Exception as e:
-            logger.error(f"Failed to auto-load model '{auto_model}': {e}")
+            print(f"[!] Failed to auto-load model '{auto_model}': {e}", flush=True)
 
 @app.get("/api/status")
 def get_status():

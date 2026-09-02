@@ -20,6 +20,10 @@ def main():
     subprocess.run(f"fuser -k {SERVER_PORT}/tcp 2>/dev/null", shell=True, check=False)
     time.sleep(1)
 
+    # 1.1 Set default vision model to auto-load upon startup
+    if "AUTO_LOAD_MODEL" not in os.environ:
+        os.environ["AUTO_LOAD_MODEL"] = "unsloth/Qwen2.5-VL-7B-Instruct-bnb-4bit"
+
     # 2. Launch Cloudflare Tunnel in background
     token = os.environ.get("CLOUDFLARE_TUNNEL_TOKEN", CLOUDFLARE_TUNNEL_TOKEN)
     tunnel_proc = None

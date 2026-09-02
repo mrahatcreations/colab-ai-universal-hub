@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import * as pdfjsLib from 'pdfjs-dist';
 import { 
   FileText, Upload, ChevronLeft, ChevronRight, Copy, Check, 
   Send, Download, Trash2, Sparkles, Layers, Eye, 
@@ -6,6 +7,9 @@ import {
   CheckSquare, ListFilter, SlidersHorizontal, Image as ImageIcon
 } from 'lucide-react';
 import { getApiBase } from '../config';
+
+// Configure PDF.js worker
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
 
 // Helper: Parse selection strings like "1-10", "1,3,5,9", "odd", "even", "all"
 function parsePageSelection(inputStr, maxPages) {
@@ -52,13 +56,14 @@ function parsePageSelection(inputStr, maxPages) {
 export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
   const [file, setFile] = useState(null);
   const [isPdf, setIsPdf] = useState(false);
+  const [pdfDoc, setPdfDoc] = useState(null); // Loaded PDF.js document object
   const [totalPages, setTotalPages] = useState(1);
   const [currentPage, setCurrentPage] = useState(1);
   const [isScanning, setIsScanning] = useState(false);
   
-  // High-Resolution Single Page Image Cache: { 1: "blob:...", 2: "blob:..." }
-  const [pageImages, setPageImages] = useState({});
-  const [isImageLoading, setIsImageLoading] = useState(false);
+  // Local Rendered Single-Page Image Cache: { 1: { url: "blob:...", blob: Blob }, ... }
+  const [renderedPages, setRenderedPages] = useState({});
+  const [isRenderingPage, setIsRenderingPage] = useState(false);
 
   // Custom Page Selection state
   const [pageRangeInput, setPageRangeInput] = useState("all");
@@ -80,69 +85,61 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
   // Clean up object URLs on unmount
   useEffect(() => {
     return () => {
-      Object.values(pageImages).forEach(url => {
-        if (url && url.startsWith('blob:')) URL.revokeObjectURL(url);
+      Object.values(renderedPages).forEach(item => {
+        if (item?.url && item.url.startsWith('blob:')) URL.revokeObjectURL(item.url);
       });
     };
   }, []);
 
-  // Fetch & render high-resolution image for a specific single page
-  const fetchPageImage = async (targetFile, pageNum) => {
-    if (!targetFile) return;
+  // In-Browser Instant PDF Page Renderer using PDF.js
+  const renderPageLocally = async (doc, pageNum) => {
+    if (!doc || renderedPages[pageNum]) return renderedPages[pageNum];
 
-    // If it's a standard image (not PDF), use local object URL directly
-    if (!targetFile.type.includes('pdf') && !targetFile.name.toLowerCase().endsWith('.pdf')) {
-      const url = URL.createObjectURL(targetFile);
-      setPageImages({ 1: url });
-      return;
-    }
-
-    // If already in cache, return
-    if (pageImages[pageNum]) return;
-
-    setIsImageLoading(true);
+    setIsRenderingPage(true);
     try {
-      const apiBase = getApiBase();
-      const formData = new FormData();
-      formData.append("file", targetFile);
-      formData.append("page_num", pageNum.toString());
+      const page = await doc.getPage(pageNum);
+      // High resolution 2.0x scale for crisp OCR and crystal clear display
+      const viewport = page.getViewport({ scale: 2.0 });
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      const ctx = canvas.getContext('2d');
 
-      const res = await fetch(`${apiBase}/api/pdf/render_page`, {
-        method: "POST",
-        body: formData
-      });
+      await page.render({ canvasContext: ctx, viewport }).promise;
 
-      if (res.ok) {
-        const blob = await res.blob();
-        const blobUrl = URL.createObjectURL(blob);
-        setPageImages(prev => ({ ...prev, [pageNum]: blobUrl }));
-      }
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+      const blobUrl = URL.createObjectURL(blob);
+
+      const pageData = { url: blobUrl, blob };
+      setRenderedPages(prev => ({ ...prev, [pageNum]: pageData }));
+      return pageData;
     } catch (err) {
-      console.error(`Failed to render page image ${pageNum}:`, err);
+      console.error(`Error rendering page ${pageNum} locally:`, err);
+      return null;
     } finally {
-      setIsImageLoading(false);
+      setIsRenderingPage(false);
     }
   };
 
-  // Load image whenever currentPage changes
+  // When currentPage or pdfDoc changes, ensure page is rendered locally
   useEffect(() => {
-    if (file && !pageImages[currentPage]) {
-      fetchPageImage(file, currentPage);
+    if (pdfDoc && !renderedPages[currentPage]) {
+      renderPageLocally(pdfDoc, currentPage);
     }
-  }, [file, currentPage]);
+  }, [pdfDoc, currentPage]);
 
   const handleFileSelect = async (selectedFile) => {
     if (!selectedFile) return;
     const isDocPdf = selectedFile.type === 'application/pdf' || selectedFile.name.toLowerCase().endsWith('.pdf');
     
     // Revoke previous images
-    Object.values(pageImages).forEach(url => {
-      if (url && url.startsWith('blob:')) URL.revokeObjectURL(url);
+    Object.values(renderedPages).forEach(item => {
+      if (item?.url && item.url.startsWith('blob:')) URL.revokeObjectURL(item.url);
     });
 
     setFile(selectedFile);
     setIsPdf(isDocPdf);
-    setPageImages({});
+    setRenderedPages({});
     setCurrentPage(1);
     setTotalPages(1);
     setPageResults({});
@@ -151,27 +148,27 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
     setSelectedPreset("all");
 
     if (isDocPdf) {
+      setIsRenderingPage(true);
       try {
-        const apiBase = getApiBase();
-        const formData = new FormData();
-        formData.append("file", selectedFile);
-        const res = await fetch(`${apiBase}/api/pdf/info`, {
-          method: "POST",
-          body: formData
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setTotalPages(data.total_pages || 1);
-        }
+        // Read file locally without uploading 67MB across the network!
+        const arrayBuffer = await selectedFile.arrayBuffer();
+        const loadedPdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        setPdfDoc(loadedPdf);
+        setTotalPages(loadedPdf.numPages);
+        
+        // Render Page 1 instantly
+        await renderPageLocally(loadedPdf, 1);
       } catch (err) {
-        console.log("Could not fetch PDF info:", err);
+        setError(`PDF লোড ব্যর্থ হয়েছে: ${err.message}`);
+      } finally {
+        setIsRenderingPage(false);
       }
-      // Render page 1
-      fetchPageImage(selectedFile, 1);
     } else {
       // Standard image
-      const url = URL.createObjectURL(selectedFile);
-      setPageImages({ 1: url });
+      const blobUrl = URL.createObjectURL(selectedFile);
+      setPdfDoc(null);
+      setTotalPages(1);
+      setRenderedPages({ 1: { url: blobUrl, blob: selectedFile } });
     }
   };
 
@@ -193,7 +190,7 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
   // Active target pages calculated from input
   const targetPages = parsePageSelection(pageRangeInput, totalPages);
 
-  // Batch / Range Automated Scanner (Single page at a time)
+  // Batch / Range Automated Scanner (Sends ONLY ~200KB single page image!)
   const handleStartAutoScan = async () => {
     if (!file || isScanning) return;
     if (targetPages.length === 0) {
@@ -213,19 +210,27 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
 
       const p = targetPages[i];
       
-      // 1. Switch viewer to this exact page and load high-res image
+      // 1. Advance to page and ensure local high-res render is ready
       setCurrentPage(p);
       setCurrentScanningTarget(p);
-      await fetchPageImage(file, p);
 
-      // 2. Send high-res single page to Colab GPU model
+      let pageData = renderedPages[p];
+      if (!pageData && pdfDoc) {
+        pageData = await renderPageLocally(pdfDoc, p);
+      }
+
+      if (!pageData?.blob) {
+        console.error(`Could not get image for page ${p}`);
+        continue;
+      }
+
+      // 2. Send ONLY the single 200KB page image to Colab T4 GPU!
       const formData = new FormData();
-      formData.append("file", file);
-      formData.append("page_num", p.toString());
+      formData.append("file", pageData.blob, `page_${p}.png`);
       formData.append("languages", languages);
 
       try {
-        const res = await fetch(`${apiBase}/api/ocr/page`, {
+        const res = await fetch(`${apiBase}/api/ocr`, {
           method: "POST",
           body: formData,
           signal: abortControllerRef.current.signal
@@ -298,13 +303,16 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
 
   const handleClear = () => {
     setFile(null);
-    setPageImages({});
+    setPdfDoc(null);
+    setRenderedPages({});
     setPageResults({});
     setError(null);
     setCurrentPage(1);
     setTotalPages(1);
     setCurrentScanningTarget(null);
   };
+
+  const currentDisplayImage = renderedPages[currentPage]?.url;
 
   return (
     <div className="flex-1 flex flex-col h-screen bg-[#1c1c1c] text-[#ececec] overflow-hidden">
@@ -318,8 +326,8 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
             <h1 className="text-sm font-semibold text-white flex items-center gap-2">
               <span>PDF & Document OCR Studio</span>
               {isPdf && (
-                <span className="text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.2 rounded font-mono">
-                  {totalPages} Pages (Single-Page Fit View)
+                <span className="text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-mono">
+                  {totalPages} {totalPages === 1 ? 'Page' : 'Pages'} (Instant Fit)
                 </span>
               )}
             </h1>
@@ -496,7 +504,7 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
           <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
             
             {/* ========================================================
-                LEFT COLUMN: 100% Fit Single-Page Canvas (No Up-Down Scroll!)
+                LEFT COLUMN: 100% Fit Single-Page Canvas (Zero Overflow)
                 ======================================================== */}
             <div className="w-full md:w-1/2 flex flex-col border-r border-[#2d2d2d] bg-[#111111] overflow-hidden">
               {/* Page Navigation Bar */}
@@ -560,21 +568,21 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
                     <div className="scanner-overlay" />
                     <div className="absolute top-6 left-1/2 -translate-x-1/2 z-30 bg-emerald-950/95 border border-emerald-500/60 text-emerald-300 px-4 py-1.5 rounded-full text-xs font-mono flex items-center gap-2 shadow-2xl backdrop-blur-md">
                       <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                      <span>হাই-রেজোলিউশন পেজ {currentScanningTarget || currentPage} স্ক্যান হচ্ছে...</span>
+                      <span>পেজ {currentScanningTarget || currentPage} স্ক্যান হচ্ছে...</span>
                     </div>
                   </>
                 )}
 
                 {/* Page Image Display (100% Fit & Crisp) */}
-                {isImageLoading && !pageImages[currentPage] ? (
+                {isRenderingPage && !currentDisplayImage ? (
                   <div className="flex flex-col items-center justify-center text-center space-y-2 text-neutral-500">
                     <Loader2 className="w-8 h-8 animate-spin text-emerald-400" />
-                    <span className="text-xs font-mono">পেজ {currentPage} হাই-রেজোলিউশনে লোড হচ্ছে...</span>
+                    <span className="text-xs font-mono">পেজ {currentPage} দ্রুত লোড হচ্ছে...</span>
                   </div>
-                ) : pageImages[currentPage] ? (
+                ) : currentDisplayImage ? (
                   <div className="relative max-h-full max-w-full flex items-center justify-center rounded-lg shadow-2xl overflow-hidden border border-[#2a2a2a] bg-white">
                     <img 
-                      src={pageImages[currentPage]} 
+                      src={currentDisplayImage} 
                       alt={`Page ${currentPage}`} 
                       className="max-h-[calc(100vh-180px)] max-w-full object-contain block"
                     />

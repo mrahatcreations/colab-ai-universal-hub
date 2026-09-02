@@ -405,7 +405,63 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
     setFormatTab("formatted");
 
     const pageKey = targetPageNum || currentPage;
+    const pageData = renderedPages[pageKey];
+    const apiBase = getApiBase();
 
+    // 1. Direct Multimodal Vision Model (Qwen2.5-VL) if page image is available
+    if (pageData?.blob) {
+      try {
+        const formData = new FormData();
+        formData.append("file", pageData.blob, `page_${pageKey}.png`);
+
+        const vRes = await fetch(`${apiBase}/api/vision/ocr`, {
+          method: "POST",
+          body: formData,
+          signal: abortControllerRef.current?.signal
+        });
+
+        if (vRes.ok) {
+          const vReader = vRes.body.getReader();
+          const vDecoder = new TextDecoder("utf-8");
+          let vAccumulator = "";
+
+          while (true) {
+            const { done, value } = await vReader.read();
+            if (done) break;
+            const chunkStr = vDecoder.decode(value, { stream: true });
+            const lines = chunkStr.split("\n");
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (trimmed.startsWith("data: ")) {
+                const dataStr = trimmed.slice(6).trim();
+                if (dataStr === "[DONE]") break;
+                try {
+                  const parsed = JSON.parse(dataStr);
+                  if (parsed.token) {
+                    vAccumulator += parsed.token;
+                    setPageResults(prev => ({
+                      ...prev,
+                      [pageKey]: extractCleanOutput(vAccumulator)
+                    }));
+                  }
+                } catch {
+                  vAccumulator += dataStr;
+                  setPageResults(prev => ({
+                    ...prev,
+                    [pageKey]: extractCleanOutput(vAccumulator)
+                  }));
+                }
+              }
+            }
+          }
+          return;
+        }
+      } catch (err) {
+        console.warn("Vision OCR endpoint not active, falling back to text LLM stream:", err);
+      }
+    }
+
+    // 2. Text LLM Fallback (DeepSeek / Qwen Text)
     const systemPrompt = `You are an expert multilingual document comprehension and editorial intelligence engine.
 Your task is to transform imperfect, raw OCR text from a book page into an impeccably structured, clean, and publication-ready digital document using your own context-aware reasoning.
 
@@ -429,7 +485,6 @@ Core Instructions:
     const userMessage = `Process, correct all spelling errors based on sentence context, and intelligently structure this book page:\n\n${textToFormat}`;
 
     try {
-      const apiBase = getApiBase();
       const res = await fetch(`${apiBase}/api/chat/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

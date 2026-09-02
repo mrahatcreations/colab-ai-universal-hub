@@ -1,10 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { 
   FileText, Upload, ChevronLeft, ChevronRight, Copy, Check, 
   Send, Download, Trash2, Sparkles, Layers, Eye, 
   FileCheck, AlertCircle, Loader2, Play, Square, FastForward,
-  CheckSquare, ListFilter, SlidersHorizontal, Image as ImageIcon
+  CheckSquare, ListFilter, SlidersHorizontal, Image as ImageIcon,
+  Wand2, Code, BookOpen
 } from 'lucide-react';
 import { getApiBase } from '../config';
 
@@ -74,6 +77,8 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
   // OCR Results cache per page: { 1: "text of page 1", 2: "text of page 2" }
   const [pageResults, setPageResults] = useState({});
   const [viewMode, setViewMode] = useState("current"); // "current" or "all"
+  const [formatTab, setFormatTab] = useState("formatted"); // 'formatted' or 'raw'
+  const [isAiFormatting, setIsAiFormatting] = useState(false);
   
   const [languages, setLanguages] = useState("en,bn");
   const [copied, setCopied] = useState(false);
@@ -279,10 +284,87 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
     setCurrentScanningTarget(null);
   };
 
+  // AI Smart Cleanup & Formatting using loaded DeepSeek-R1 model!
+  const handleAiFormat = async () => {
+    const rawText = getActiveText();
+    if (!rawText || isAiFormatting) return;
+
+    setIsAiFormatting(true);
+    setFormatTab("formatted");
+
+    const prompt = `তুমি একজন এক্সপার্ট বাংলা ও ইংরেজি একাডেমিক টেক্সট এডিটর। নিচের OCR টেক্সটটিকে অত্যন্ত সুন্দর, গোছানো এবং প্রফেশনাল Markdown ফরম্যাটে সাজিয়ে দাও:
+1. বানানের ভুল ও যুক্তবর্ণের বিকৃতি ঠিক করো (যেমন: 'আযতারুজ্জামান' -> 'আখতারুজ্জামান', 'গমে' -> 'গল্পে', 'উবর:' -> 'উত্তর:', 'প্রশ্লনব্যাংক' -> 'প্রশ্নব্যাংক')।
+2. প্রশ্ন ও অপশনগুলো পরিপাটি ফরম্যাটে সাজাও:
+   ### প্রশ্ন X: ...
+   - [A] ...
+   - [B] ...
+   - [C] ...
+   - [D] ...
+   > **সঠিক উত্তর ও ব্যাখ্যা:** ...
+3. সূচিপত্র বা তালিকা থাকলে সুন্দর Markdown টেবিলে রূপান্তর করো (| বিষয় | পৃষ্ঠা |)।
+4. কোনো ভূমিকা বা গৌরচন্দ্রিকা ছাড়া সরাসরি সম্পূর্ণ সাজানো টেক্সটটি দাও।
+
+OCR Raw Text:
+${rawText}`;
+
+    try {
+      const apiBase = getApiBase();
+      const res = await fetch(`${apiBase}/api/chat/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [{ role: "user", content: prompt }],
+          max_new_tokens: 2048,
+          temperature: 0.2
+        })
+      });
+
+      if (!res.ok) throw new Error("AI Formatting failed.");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let formattedAccumulator = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split("\n");
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith("data: ")) {
+            const dataStr = trimmed.slice(6).trim();
+            if (dataStr === "[DONE]") break;
+            try {
+              const parsed = JSON.parse(dataStr);
+              if (parsed.token) {
+                formattedAccumulator += parsed.token;
+                setPageResults(prev => ({
+                  ...prev,
+                  [currentPage]: formattedAccumulator
+                }));
+              }
+            } catch {
+              formattedAccumulator += dataStr;
+              setPageResults(prev => ({
+                ...prev,
+                [currentPage]: formattedAccumulator
+              }));
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsAiFormatting(false);
+    }
+  };
+
   const getCombinedText = () => {
     const pages = Object.keys(pageResults).sort((a, b) => Number(a) - Number(b));
     if (pages.length === 0) return "";
-    return pages.map(p => `=== পৃষ্ঠা ${p} ===\n${pageResults[p]}`).join("\n\n");
+    return pages.map(p => `## পৃষ্ঠা ${p}\n\n${pageResults[p]}`).join("\n\n---\n\n");
   };
 
   const getActiveText = () => {
@@ -308,11 +390,11 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
   const handleDownloadTxt = () => {
     const text = getActiveText();
     if (!text) return;
-    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    const blob = new Blob([text], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${file?.name?.replace(/\.[^/.]+$/, "") || "ocr_document"}_${viewMode === "all" ? "full" : `page_${currentPage}`}.txt`;
+    link.download = `${file?.name?.replace(/\.[^/.]+$/, "") || "ocr_document"}_${viewMode === "all" ? "full" : `page_${currentPage}`}.md`;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -612,28 +694,51 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
             </div>
 
             {/* ========================================================
-                RIGHT COLUMN: Extracted OCR Text Editor
+                RIGHT COLUMN: Smart Extracted Text & AI Formatter
                 ======================================================== */}
             <div className="w-full md:w-1/2 flex flex-col bg-[#181818] overflow-hidden">
               {/* Results Header Toolbar */}
               <div className="h-10 border-b border-[#282828] bg-[#1a1a1a] px-4 flex items-center justify-between text-xs shrink-0">
                 <div className="flex items-center gap-2">
-                  <span className="font-semibold text-neutral-200">এক্সট্রাক্ট করা টেক্সট</span>
+                  <span className="font-semibold text-neutral-200">টেক্সট ফলাফল</span>
+
+                  {/* Smart View Toggle: Formatted vs Raw */}
+                  <div className="flex bg-[#242424] rounded-lg p-0.5 border border-[#333]">
+                    <button
+                      onClick={() => setFormatTab("formatted")}
+                      className={`px-2 py-0.5 rounded text-[11px] font-medium flex items-center gap-1 transition-all ${
+                        formatTab === "formatted" ? "bg-emerald-600 text-white shadow-sm" : "text-neutral-400 hover:text-white"
+                      }`}
+                    >
+                      <BookOpen className="w-3 h-3" />
+                      <span>স্মার্ট ভিউ</span>
+                    </button>
+
+                    <button
+                      onClick={() => setFormatTab("raw")}
+                      className={`px-2 py-0.5 rounded text-[11px] font-medium flex items-center gap-1 transition-all ${
+                        formatTab === "raw" ? "bg-emerald-600 text-white shadow-sm" : "text-neutral-400 hover:text-white"
+                      }`}
+                    >
+                      <Code className="w-3 h-3" />
+                      <span>র (Raw)</span>
+                    </button>
+                  </div>
 
                   {Object.keys(pageResults).length > 0 && (
                     <div className="flex bg-[#242424] rounded-lg p-0.5 border border-[#333]">
                       <button
                         onClick={() => setViewMode("current")}
-                        className={`px-2.5 py-0.5 rounded text-[11px] font-medium transition-all ${
-                          viewMode === "current" ? "bg-emerald-600 text-white shadow-sm" : "text-neutral-400 hover:text-white"
+                        className={`px-2 py-0.5 rounded text-[11px] font-medium transition-all ${
+                          viewMode === "current" ? "bg-[#333] text-white" : "text-neutral-400 hover:text-white"
                         }`}
                       >
                         পেজ {currentPage}
                       </button>
                       <button
                         onClick={() => setViewMode("all")}
-                        className={`px-2.5 py-0.5 rounded text-[11px] font-medium transition-all ${
-                          viewMode === "all" ? "bg-emerald-600 text-white shadow-sm" : "text-neutral-400 hover:text-white"
+                        className={`px-2 py-0.5 rounded text-[11px] font-medium transition-all ${
+                          viewMode === "all" ? "bg-[#333] text-white" : "text-neutral-400 hover:text-white"
                         }`}
                       >
                         সব পেজ ({Object.keys(pageResults).length})
@@ -642,8 +747,19 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
                   )}
                 </div>
 
-                {/* Actions */}
+                {/* AI Polish & Actions */}
                 <div className="flex items-center gap-1.5">
+                  {/* Magic AI Smart Clean Button */}
+                  <button
+                    onClick={handleAiFormat}
+                    disabled={!getActiveText() || isAiFormatting}
+                    className="px-2.5 py-1 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-medium flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-30"
+                    title="DeepSeek AI দিয়ে বানান ঠিক করে সুন্দর প্রশ্ন ও টেবিলে সাজান"
+                  >
+                    <Wand2 className={`w-3.5 h-3.5 ${isAiFormatting ? 'animate-spin' : ''}`} />
+                    <span>{isAiFormatting ? "সাজানো হচ্ছে..." : "✨ AI দিয়ে সাজান"}</span>
+                  </button>
+
                   <button
                     onClick={handleCopy}
                     disabled={!getActiveText()}
@@ -651,14 +767,14 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
                     title="টেক্সট কপি করুন"
                   >
                     {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span className="hidden sm:inline">{copied ? "কপি হয়েছে" : "কপি"}</span>
+                    <span className="hidden sm:inline">{copied ? "কপি" : "কপি"}</span>
                   </button>
 
                   <button
                     onClick={handleDownloadTxt}
                     disabled={!getActiveText()}
                     className="p-1.5 rounded-lg hover:bg-[#282828] text-neutral-300 disabled:opacity-30 flex items-center gap-1 text-xs transition-colors"
-                    title="TXT ডাউনলোড"
+                    title="Markdown/TXT ডাউনলোড"
                   >
                     <Download className="w-3.5 h-3.5" />
                     <span className="hidden sm:inline">ডাউনলোড</span>
@@ -667,7 +783,7 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
                   <button
                     onClick={handleSendToChat}
                     disabled={!getActiveText()}
-                    className="px-2.5 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 disabled:opacity-30 flex items-center gap-1.5 text-xs font-medium ml-1 transition-all"
+                    className="px-2 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 disabled:opacity-30 flex items-center gap-1.5 text-xs font-medium ml-1 transition-all"
                     title="এই টেক্সট নিয়ে চ্যাটে কথা বলুন"
                   >
                     <Send className="w-3 h-3" />
@@ -693,13 +809,21 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
                       উপরে <span className="text-emerald-400 font-medium">'All', 'Odd', 'Even'</span> অথবা রেঞ্জ দিয়ে <span className="text-emerald-400 font-medium">'অটো স্ক্যান শুরু করুন'</span> বাটনে ক্লিক করুন।
                     </div>
                   </div>
+                ) : formatTab === "formatted" ? (
+                  /* Editorial Smart Markdown View */
+                  <div className="flex-1 bg-[#141414] border border-[#2b2b2b] rounded-xl p-5 overflow-y-auto text-neutral-200 prose prose-invert max-w-none text-xs md:text-sm leading-relaxed space-y-3">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {getActiveText() + (isScanning ? "\n\n`[পেজ " + (currentScanningTarget || currentPage) + " স্ক্যানিং চলছে... ▍]`" : "")}
+                    </ReactMarkdown>
+                  </div>
                 ) : (
+                  /* Raw Editable Textarea */
                   <div className="flex-1 flex flex-col relative h-full">
                     <textarea
                       value={getActiveText() + (isScanning ? "\n\n[পেজ " + (currentScanningTarget || currentPage) + " স্ক্যানিং চলছে... ▍]" : "")}
                       readOnly
                       placeholder="শনাক্তকৃত টেক্সট এখানে রিয়েল-টাইমে স্ট্রিম হবে..."
-                      className="flex-1 w-full bg-[#131313] border border-[#2b2b2b] rounded-xl p-4 text-xs md:text-sm text-neutral-100 font-sans leading-relaxed resize-none focus:outline-none focus:border-emerald-500"
+                      className="flex-1 w-full bg-[#131313] border border-[#2b2b2b] rounded-xl p-4 text-xs md:text-sm text-neutral-100 font-mono leading-relaxed resize-none focus:outline-none focus:border-emerald-500"
                     />
                   </div>
                 )}

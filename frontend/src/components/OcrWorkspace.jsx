@@ -284,37 +284,33 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
     setCurrentScanningTarget(null);
   };
 
-  // AI Smart Question Organizer & Classifier using loaded DeepSeek-R1 model!
+  // Universal AI Document Intelligence & Structuring Engine (DeepSeek-R1)
   const formatTextWithAi = async (textToFormat, targetPageNum = null) => {
     if (!textToFormat || !textToFormat.trim()) return;
 
     setIsAiFormatting(true);
     setFormatTab("formatted");
 
-    const prompt = `তুমি একজন এক্সপার্ট বাংলা ও ইংরেজি একাডেমিক টেক্সট এডিটর ও এআই প্রশ্নব্যাংক বিশ্লেষক।
-নিচের OCR টেক্সটটিকে অত্যন্ত বুদ্ধিদীপ্তভাবে, নির্ভুল বানানে এবং প্রতিটি প্রশ্ন টাইপ অনুযায়ী সাজিয়ে দাও:
+    const systemPrompt = `You are an advanced multilingual document intelligence and editorial refinement engine.
 
-১. **প্রতিটি প্রশ্ন আলাদা ও পরিপাটি কার্ড ফরম্যাটে সাজাও:**
-   ### 🔹 প্রশ্ন [নম্বর]: [প্রশ্নের মূল টেক্সট]
-   - **(A)** [অপশন ক]
-   - **(B)** [অপশন খ]
-   - **(C)** [অপশন গ]
-   - **(D)** [অপশন ঘ]
-   > 💡 **সঠিক উত্তর:** [উত্তর]  
-   > 📖 **ব্যাখ্যা:** [বিশ্লেষণ/ব্যাখ্যা]
+Your task is to transform imperfect, noisy raw OCR text (Bengali, English, or mixed) into an impeccably structured, clean, and publication-ready digital document using your own context-aware reasoning.
 
-২. **টাইপ ও বিষয় ক্যাটাগরি নির্ধারণ করো:**
-   প্রশ্নের বিষয় বুঝতে পারলে ট্যাগ যুক্ত করো (যেমন: 🏷️ [বাংলা সাহিত্য], 🏷️ [ব্যাকরণ: সমাস/সন্ধি], 🏷️ [সাধারণ জ্ঞান], 🏷️ [ইংরেজি গ্রামার])।
+Core Instructions:
+1. Contextual Typo & Artifact Correction:
+   - Identify the nature, genre, and topic of the text.
+   - Automatically correct OCR recognition artifacts, broken conjuncts (যুক্তবর্ণ), split compound words, and misrecognized characters based on semantic and grammatical context (e.g. correcting misread author names, book titles, or technical terminology).
 
-৩. **বানান ও যুক্তবর্ণ সংশোধন করো:**
-   OCR-এর যাবতীয় যুক্তাক্ষর ও টাইপো ভুল সংশোধন করো (যেমন: 'আযতারুজ্জামান' -> 'আখতারুজ্জামান', 'গমে' -> 'গল্পে', 'উবর:' -> 'উত্তর:', 'প্রশ্লনব্যাংক' -> 'প্রশ্নব্যাংক', 'লক্কি' -> 'লক্ষি')।
+2. Universal & Adaptive Structuring:
+   - Do NOT force rigid or unnatural templates. Intelligently adapt your structure to what the text truly is:
+     * If the text contains questions/MCQs: Present them with clear hierarchy—question stem, clean option choices (A, B, C, D), highlighted correct answers, and well-separated explanations.
+     * If the text represents tables of contents, indices, or structured lists: Format them into clean, aligned Markdown tables.
+     * If the text is literary prose, an essay, or an article: Organize with logical headings, clean paragraphs, and styled blockquotes.
+     * If there are distinct sections or subjects: Separate them with clear sectional headers and meaningful contextual tags.
 
-৪. **সূচিপত্র বা তালিকা থাকলে:** সুন্দর Markdown টেবিলে সাজাও (| বিষয় | পৃষ্ঠা |)।
+3. Purity & Directness:
+   - Output ONLY the polished, structured Markdown text. Do NOT include any introductory pleasantries, conversational remarks, or concluding commentary.`;
 
-কোনো ভূমিকা, গৌরচন্দ্রিকা বা উপসংহার না দিয়ে সরাসরি শুধুমাত্র সম্পূর্ণ সাজানো পরিপাটি টেক্সটটি দাও।
-
-OCR Raw Text:
-${textToFormat}`;
+    const userMessage = `Process, correct, and intelligently structure this OCR transcription:\n\n${textToFormat}`;
 
     try {
       const apiBase = getApiBase();
@@ -322,7 +318,10 @@ ${textToFormat}`;
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: [{ role: "user", content: prompt }],
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userMessage }
+          ],
           max_new_tokens: 2048,
           temperature: 0.2
         })

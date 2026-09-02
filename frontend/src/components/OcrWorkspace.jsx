@@ -102,6 +102,18 @@ function formatBookPageContent(rawText) {
   return formattedLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
+// Clean reasoning thoughts (<think>...</think> or raw internal monologue) from model output
+function extractCleanOutput(rawText) {
+  if (!rawText) return "";
+  if (rawText.includes("</think>")) {
+    return rawText.split("</think>").slice(1).join("</think>").trimStart();
+  }
+  if (/^(?:<think>|Okay|Let me|I need to|First|The text|Thinking)/i.test(rawText.trim())) {
+    return "🧠 *বাক্য ও বানান বিশ্লেষণ হচ্ছে...*";
+  }
+  return rawText;
+}
+
 export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
   const [file, setFile] = useState(null);
   const [isPdf, setIsPdf] = useState(false);
@@ -385,17 +397,7 @@ Core Instructions:
       const decoder = new TextDecoder("utf-8");
       let streamAccumulator = "";
 
-// Clean reasoning thoughts (<think>...</think> or raw internal monologue) from DeepSeek-R1
-function extractCleanOutput(rawText) {
-  if (!rawText) return "";
-  if (rawText.includes("</think>")) {
-    return rawText.split("</think>").slice(1).join("</think>").trimStart();
-  }
-  if (/^(?:<think>|Okay|Let me|I need to|First|The text|Thinking)/i.test(rawText.trim())) {
-    return "🧠 *এআই প্রতিটি বাক্য ও বানান বিশ্লেষণ করছে...*";
-  }
-  return rawText;
-}
+
 
       while (true) {
         const { done, value } = await reader.read();
@@ -442,12 +444,12 @@ function extractCleanOutput(rawText) {
   const getCombinedText = () => {
     const pages = Object.keys(pageResults).sort((a, b) => Number(a) - Number(b));
     if (pages.length === 0) return "";
-    return pages.map(p => `## পৃষ্ঠা ${p}\n\n${pageResults[p]}`).join("\n\n---\n\n");
+    return pages.map(p => `## পৃষ্ঠা ${p}\n\n${extractCleanOutput(pageResults[p])}`).join("\n\n---\n\n");
   };
 
   const getActiveText = () => {
-    if (viewMode === "all") return getCombinedText();
-    return pageResults[currentPage] || "";
+    const raw = viewMode === "all" ? getCombinedText() : (pageResults[currentPage] || "");
+    return extractCleanOutput(raw);
   };
 
   const handleCopy = () => {

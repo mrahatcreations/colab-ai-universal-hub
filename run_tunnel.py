@@ -7,16 +7,16 @@ if sys.platform == "win32":
         pass
 import time
 import subprocess
+import uvicorn
 from config import CLOUDFLARE_TUNNEL_TOKEN, SERVER_HOST, SERVER_PORT, DOMAIN
 from tunnel.cloudflare import start_tunnel
-from ui.layout import build_app
 
 def main():
     print("=" * 65)
-    print("🚀 Colab AI Universal Hub & Cloudflare Tunnel Runner")
+    print("🚀 Colab AI Universal Core API & Cloudflare Tunnel Runner")
     print("=" * 65)
 
-    # 1. Kill any existing process on port 8000
+    # 1. Kill any existing process on port
     subprocess.run(f"fuser -k {SERVER_PORT}/tcp 2>/dev/null", shell=True, check=False)
     time.sleep(1)
 
@@ -34,20 +34,16 @@ def main():
         print("[!] No Cloudflare token provided. Running in local mode only.")
 
     print("\n" + "=" * 65)
-    print(f"🎉 ড্যাশবোর্ড চালু হচ্ছে: https://{DOMAIN}")
-    print(f"👉 লোকাল পোর্ট: http://{SERVER_HOST}:{SERVER_PORT}")
+    print(f"🎉 Colab AI Backend API Live at: https://{DOMAIN}")
+    print(f"👉 Local Port: http://{SERVER_HOST}:{SERVER_PORT}")
+    print(f"📄 Interactive Swagger API Docs: https://{DOMAIN}/docs")
     print("=" * 65 + "\n")
 
-    # 3. Launch Gradio App in foreground
-    app = build_app()
+    # 3. Launch FastAPI with Uvicorn
     try:
-        app.launch(
-            server_name=SERVER_HOST,
-            server_port=SERVER_PORT,
-            share=False
-        )
+        uvicorn.run("server:app", host=SERVER_HOST, port=SERVER_PORT, log_level="info", reload=False)
     except KeyboardInterrupt:
-        print("\n[!] Shutting down...")
+        print("\n[!] Shutting down server...")
     finally:
         if tunnel_proc:
             tunnel_proc.terminate()

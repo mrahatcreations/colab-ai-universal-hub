@@ -20,3 +20,7 @@ downloaded_models/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Frontend dependencies and builds
+frontend/node_modules/
+frontend/dist/

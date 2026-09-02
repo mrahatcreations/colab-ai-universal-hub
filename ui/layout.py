@@ -22,7 +22,7 @@ CUSTOM_CSS = """
 """
 
 def build_app():
-    with gr.Blocks(title="Colab AI Universal Hub", css=CUSTOM_CSS, theme=gr.themes.Soft()) as app:
+    with gr.Blocks(title="Colab AI Universal Hub") as app:
         gr.Markdown(
             "# 🌌 Colab AI Universal Hub\n"
             "**LLM Chat • OCR • Model Manager • Hugging Face Hub**"

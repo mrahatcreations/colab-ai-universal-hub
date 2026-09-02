@@ -10,7 +10,7 @@ def create_ocr_tab():
                 lang_selector = gr.CheckboxGroup(["en", "bn"], value=["en", "bn"], label="সক্রিয় ভাষাসমূহ (Languages)")
                 extract_btn = gr.Button("🔍 টেক্সট এক্সট্রাক্ট করুন", variant="primary")
             with gr.Column(scale=1):
-                txt_output = gr.Textbox(label="শনাক্তকৃত টেক্সট (Extracted Text)", lines=16, show_copy_button=True)
+                txt_output = gr.Textbox(label="শনাক্তকৃত টেক্সট (Extracted Text)", lines=16)
 
         extract_btn.click(
             fn=extract_text_from_image,

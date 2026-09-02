@@ -6,7 +6,6 @@ def create_chat_tab():
         chatbot = gr.Chatbot(
             height=600,
             show_label=False,
-            bubble_full_width=False,
             render_markdown=True,
             avatar_images=(
                 "https://api.iconify.design/solar:user-bold.svg?color=%238e8ea0",

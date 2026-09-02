@@ -284,28 +284,37 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
     setCurrentScanningTarget(null);
   };
 
-  // AI Smart Cleanup & Formatting using loaded DeepSeek-R1 model!
-  const handleAiFormat = async () => {
-    const rawText = getActiveText();
-    if (!rawText || isAiFormatting) return;
+  // AI Smart Question Organizer & Classifier using loaded DeepSeek-R1 model!
+  const formatTextWithAi = async (textToFormat, targetPageNum = null) => {
+    if (!textToFormat || !textToFormat.trim()) return;
 
     setIsAiFormatting(true);
     setFormatTab("formatted");
 
-    const prompt = `তুমি একজন এক্সপার্ট বাংলা ও ইংরেজি একাডেমিক টেক্সট এডিটর। নিচের OCR টেক্সটটিকে অত্যন্ত সুন্দর, গোছানো এবং প্রফেশনাল Markdown ফরম্যাটে সাজিয়ে দাও:
-1. বানানের ভুল ও যুক্তবর্ণের বিকৃতি ঠিক করো (যেমন: 'আযতারুজ্জামান' -> 'আখতারুজ্জামান', 'গমে' -> 'গল্পে', 'উবর:' -> 'উত্তর:', 'প্রশ্লনব্যাংক' -> 'প্রশ্নব্যাংক')।
-2. প্রশ্ন ও অপশনগুলো পরিপাটি ফরম্যাটে সাজাও:
-   ### প্রশ্ন X: ...
-   - [A] ...
-   - [B] ...
-   - [C] ...
-   - [D] ...
-   > **সঠিক উত্তর ও ব্যাখ্যা:** ...
-3. সূচিপত্র বা তালিকা থাকলে সুন্দর Markdown টেবিলে রূপান্তর করো (| বিষয় | পৃষ্ঠা |)।
-4. কোনো ভূমিকা বা গৌরচন্দ্রিকা ছাড়া সরাসরি সম্পূর্ণ সাজানো টেক্সটটি দাও।
+    const prompt = `তুমি একজন এক্সপার্ট বাংলা ও ইংরেজি একাডেমিক টেক্সট এডিটর ও এআই প্রশ্নব্যাংক বিশ্লেষক।
+নিচের OCR টেক্সটটিকে অত্যন্ত বুদ্ধিদীপ্তভাবে, নির্ভুল বানানে এবং প্রতিটি প্রশ্ন টাইপ অনুযায়ী সাজিয়ে দাও:
+
+১. **প্রতিটি প্রশ্ন আলাদা ও পরিপাটি কার্ড ফরম্যাটে সাজাও:**
+   ### 🔹 প্রশ্ন [নম্বর]: [প্রশ্নের মূল টেক্সট]
+   - **(A)** [অপশন ক]
+   - **(B)** [অপশন খ]
+   - **(C)** [অপশন গ]
+   - **(D)** [অপশন ঘ]
+   > 💡 **সঠিক উত্তর:** [উত্তর]  
+   > 📖 **ব্যাখ্যা:** [বিশ্লেষণ/ব্যাখ্যা]
+
+২. **টাইপ ও বিষয় ক্যাটাগরি নির্ধারণ করো:**
+   প্রশ্নের বিষয় বুঝতে পারলে ট্যাগ যুক্ত করো (যেমন: 🏷️ [বাংলা সাহিত্য], 🏷️ [ব্যাকরণ: সমাস/সন্ধি], 🏷️ [সাধারণ জ্ঞান], 🏷️ [ইংরেজি গ্রামার])।
+
+৩. **বানান ও যুক্তবর্ণ সংশোধন করো:**
+   OCR-এর যাবতীয় যুক্তাক্ষর ও টাইপো ভুল সংশোধন করো (যেমন: 'আযতারুজ্জামান' -> 'আখতারুজ্জামান', 'গমে' -> 'গল্পে', 'উবর:' -> 'উত্তর:', 'প্রশ্লনব্যাংক' -> 'প্রশ্নব্যাংক', 'লক্কি' -> 'লক্ষি')।
+
+৪. **সূচিপত্র বা তালিকা থাকলে:** সুন্দর Markdown টেবিলে সাজাও (| বিষয় | পৃষ্ঠা |)।
+
+কোনো ভূমিকা, গৌরচন্দ্রিকা বা উপসংহার না দিয়ে সরাসরি শুধুমাত্র সম্পূর্ণ সাজানো পরিপাটি টেক্সটটি দাও।
 
 OCR Raw Text:
-${rawText}`;
+${textToFormat}`;
 
     try {
       const apiBase = getApiBase();
@@ -324,6 +333,7 @@ ${rawText}`;
       const reader = res.body.getReader();
       const decoder = new TextDecoder("utf-8");
       let formattedAccumulator = "";
+      const pageKey = targetPageNum || currentPage;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -341,14 +351,14 @@ ${rawText}`;
                 formattedAccumulator += parsed.token;
                 setPageResults(prev => ({
                   ...prev,
-                  [currentPage]: formattedAccumulator
+                  [pageKey]: formattedAccumulator
                 }));
               }
             } catch {
               formattedAccumulator += dataStr;
               setPageResults(prev => ({
                 ...prev,
-                [currentPage]: formattedAccumulator
+                [pageKey]: formattedAccumulator
               }));
             }
           }
@@ -359,6 +369,10 @@ ${rawText}`;
     } finally {
       setIsAiFormatting(false);
     }
+  };
+
+  const handleAiFormat = () => {
+    formatTextWithAi(getActiveText(), currentPage);
   };
 
   const getCombinedText = () => {

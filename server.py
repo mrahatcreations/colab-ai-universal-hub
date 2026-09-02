@@ -46,18 +46,24 @@ app.add_middleware(
 state_lock = threading.Lock()
 CURRENT_MODEL = None
 CURRENT_TOKENIZER = None
+CURRENT_PROCESSOR = None
+IS_VISION_MODEL = False
 ACTIVE_MODEL_NAME = "None"
 ocr_reader = None
 hf_api = HfApi()
 
 def clear_vram():
-    global CURRENT_MODEL, CURRENT_TOKENIZER, ACTIVE_MODEL_NAME
+    global CURRENT_MODEL, CURRENT_TOKENIZER, CURRENT_PROCESSOR, IS_VISION_MODEL, ACTIVE_MODEL_NAME
     with state_lock:
         if CURRENT_MODEL is not None:
             del CURRENT_MODEL
             del CURRENT_TOKENIZER
+            if CURRENT_PROCESSOR is not None:
+                del CURRENT_PROCESSOR
             CURRENT_MODEL = None
             CURRENT_TOKENIZER = None
+            CURRENT_PROCESSOR = None
+            IS_VISION_MODEL = False
             ACTIVE_MODEL_NAME = "None"
             gc.collect()
             if torch.cuda.is_available():
@@ -170,7 +176,6 @@ def load_model_endpoint(req: LoadModelRequest):
     model_source = str(local_path) if local_path.exists() else repo_id
 
     try:
-        tokenizer = AutoTokenizer.from_pretrained(model_source, trust_remote_code=True)
         load_kwargs = {
             "device_map": "auto",
             "trust_remote_code": True
@@ -195,17 +200,36 @@ def load_model_endpoint(req: LoadModelRequest):
                 elif req.quantization == "8bit":
                     load_kwargs["load_in_8bit"] = True
 
-        model = AutoModelForCausalLM.from_pretrained(model_source, **load_kwargs)
+        is_vl = any(term in repo_id.lower() for term in ["vl", "vision"])
+        processor = None
+
+        if is_vl:
+            try:
+                from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
+                processor = AutoProcessor.from_pretrained(model_source, trust_remote_code=True)
+                model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model_source, **load_kwargs)
+                tokenizer = processor.tokenizer
+            except Exception:
+                from transformers import AutoModelForVision2Seq, AutoProcessor
+                processor = AutoProcessor.from_pretrained(model_source, trust_remote_code=True)
+                model = AutoModelForVision2Seq.from_pretrained(model_source, **load_kwargs)
+                tokenizer = processor.tokenizer
+        else:
+            tokenizer = AutoTokenizer.from_pretrained(model_source, trust_remote_code=True)
+            model = AutoModelForCausalLM.from_pretrained(model_source, **load_kwargs)
 
         with state_lock:
             CURRENT_MODEL = model
             CURRENT_TOKENIZER = tokenizer
+            CURRENT_PROCESSOR = processor
+            IS_VISION_MODEL = is_vl
             ACTIVE_MODEL_NAME = repo_id
 
         return {
             "status": "success",
             "message": f"Model '{repo_id}' loaded successfully in {req.quantization.upper()} mode.",
             "active_model": ACTIVE_MODEL_NAME,
+            "is_vision_model": IS_VISION_MODEL,
             "vram": get_vram_info()
         }
     except Exception as e:
@@ -361,6 +385,109 @@ async def chat_stream_endpoint(req: ChatStreamRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Inference error: {str(e)}")
+
+# ---------------------------------------------------------------------------
+# Multimodal Vision-Language OCR Streaming Endpoint (Qwen2.5-VL)
+# ---------------------------------------------------------------------------
+@app.post("/api/vision/ocr")
+async def vision_ocr_endpoint(
+    file: UploadFile = File(...),
+    prompt: Optional[str] = Form(None)
+):
+    global CURRENT_MODEL, CURRENT_PROCESSOR, CURRENT_TOKENIZER, IS_VISION_MODEL
+    if CURRENT_MODEL is None or CURRENT_PROCESSOR is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No Vision Model is currently loaded. Please load Qwen2.5-VL first."
+        )
+
+    from PIL import Image
+    import io
+
+    contents = await file.read()
+    image = Image.open(io.BytesIO(contents)).convert("RGB")
+
+    default_prompt = (
+        "Read and transcribe this book page accurately into clean Markdown.\n"
+        "Core Rules:\n"
+        "1. This page contains two columns. Read Column 1 completely top-to-bottom first, then Column 2 top-to-bottom.\n"
+        "2. Correct all Bengali spelling and grammar to 100% precision.\n"
+        "3. Format questions with ### 🔹 প্রশ্ন [নম্বর], bulleted options with - **(A)**, and quote blocks for answers (> 💡 **উত্তর:**).\n"
+        "4. Keep generous spacing between questions.\n"
+        "Output ONLY the clean Markdown text."
+    )
+    user_prompt = prompt.strip() if prompt and prompt.strip() else default_prompt
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": image},
+                {"type": "text", "text": user_prompt}
+            ]
+        }
+    ]
+
+    try:
+        text = CURRENT_PROCESSOR.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+
+        try:
+            from qwen_vl_utils import process_vision_info
+            image_inputs, video_inputs = process_vision_info(messages)
+            inputs = CURRENT_PROCESSOR(
+                text=[text],
+                images=image_inputs,
+                videos=video_inputs,
+                padding=True,
+                return_tensors="pt"
+            ).to(CURRENT_MODEL.device)
+        except Exception:
+            inputs = CURRENT_PROCESSOR(
+                text=[text],
+                images=[image],
+                padding=True,
+                return_tensors="pt"
+            ).to(CURRENT_MODEL.device)
+
+        streamer = TextIteratorStreamer(
+            CURRENT_TOKENIZER,
+            timeout=60.0,
+            skip_prompt=True,
+            skip_special_tokens=True
+        )
+
+        generation_kwargs = dict(
+            **inputs,
+            streamer=streamer,
+            max_new_tokens=2048,
+            do_sample=False
+        )
+
+        thread = threading.Thread(target=CURRENT_MODEL.generate, kwargs=generation_kwargs)
+        thread.start()
+
+        async def sse_vision_stream():
+            loop = asyncio.get_event_loop()
+            while True:
+                token = await loop.run_in_executor(None, lambda: next(streamer, None))
+                if token is None:
+                    break
+                yield f"data: {json.dumps({'token': token})}\n\n"
+            yield f"data: [DONE]\n\n"
+
+        return StreamingResponse(
+            sse_vision_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Vision inference error: {str(e)}")
 
 # ---------------------------------------------------------------------------
 # OCR Endpoint & Intelligent Column-Aware Formatter

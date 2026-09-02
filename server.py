@@ -10,7 +10,7 @@ from typing import Optional, List, Dict, Any
 import torch
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, Response
 from pydantic import BaseModel
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
 from huggingface_hub import HfApi, snapshot_download
@@ -458,6 +458,28 @@ async def get_pdf_info(file: UploadFile = File(...)):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"PDF reading error: {str(e)}")
+
+@app.post("/api/pdf/render_page")
+async def render_pdf_page_endpoint(
+    file: UploadFile = File(...),
+    page_num: int = Form(1)
+):
+    """Renders a single PDF page into a high-res PNG image for clean fit display."""
+    import io
+    try:
+        import pypdfium2 as pdfium
+        content = await file.read()
+        pdf = pdfium.PdfDocument(content)
+        total_pages = len(pdf)
+        target_idx = max(0, min(page_num - 1, total_pages - 1))
+        page = pdf[target_idx]
+        pil_image = page.render(scale=2.0).to_pil()
+        buf = io.BytesIO()
+        pil_image.save(buf, format="PNG")
+        buf.seek(0)
+        return Response(content=buf.getvalue(), media_type="image/png")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Render page error: {str(e)}")
 
 @app.post("/api/ocr/page")
 async def ocr_single_page_endpoint(

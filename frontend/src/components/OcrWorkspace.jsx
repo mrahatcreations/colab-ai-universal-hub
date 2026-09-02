@@ -3,7 +3,7 @@ import {
   FileText, Upload, ChevronLeft, ChevronRight, Copy, Check, 
   Send, Download, Trash2, Sparkles, Layers, Eye, 
   FileCheck, AlertCircle, Loader2, Play, Square, FastForward,
-  CheckSquare, ListFilter, SlidersHorizontal
+  CheckSquare, ListFilter, SlidersHorizontal, Image as ImageIcon
 } from 'lucide-react';
 import { getApiBase } from '../config';
 
@@ -51,16 +51,19 @@ function parsePageSelection(inputStr, maxPages) {
 
 export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
   const [file, setFile] = useState(null);
-  const [fileUrl, setFileUrl] = useState(null);
   const [isPdf, setIsPdf] = useState(false);
   const [totalPages, setTotalPages] = useState(1);
   const [currentPage, setCurrentPage] = useState(1);
   const [isScanning, setIsScanning] = useState(false);
   
+  // High-Resolution Single Page Image Cache: { 1: "blob:...", 2: "blob:..." }
+  const [pageImages, setPageImages] = useState({});
+  const [isImageLoading, setIsImageLoading] = useState(false);
+
   // Custom Page Selection state
   const [pageRangeInput, setPageRangeInput] = useState("all");
   const [selectedPreset, setSelectedPreset] = useState("all"); // 'all', 'odd', 'even', 'custom'
-  const [currentScanningTarget, setCurrentScanningTarget] = useState(null); // page currently being processed
+  const [currentScanningTarget, setCurrentScanningTarget] = useState(null); // page currently being scanned
   const [scanProgress, setScanProgress] = useState({ done: 0, total: 0 });
 
   // OCR Results cache per page: { 1: "text of page 1", 2: "text of page 2" }
@@ -74,20 +77,72 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
   const fileInputRef = useRef(null);
   const abortControllerRef = useRef(null);
 
-  // Cleanup object URL
+  // Clean up object URLs on unmount
   useEffect(() => {
     return () => {
-      if (fileUrl) URL.revokeObjectURL(fileUrl);
+      Object.values(pageImages).forEach(url => {
+        if (url && url.startsWith('blob:')) URL.revokeObjectURL(url);
+      });
     };
-  }, [fileUrl]);
+  }, []);
+
+  // Fetch & render high-resolution image for a specific single page
+  const fetchPageImage = async (targetFile, pageNum) => {
+    if (!targetFile) return;
+
+    // If it's a standard image (not PDF), use local object URL directly
+    if (!targetFile.type.includes('pdf') && !targetFile.name.toLowerCase().endsWith('.pdf')) {
+      const url = URL.createObjectURL(targetFile);
+      setPageImages({ 1: url });
+      return;
+    }
+
+    // If already in cache, return
+    if (pageImages[pageNum]) return;
+
+    setIsImageLoading(true);
+    try {
+      const apiBase = getApiBase();
+      const formData = new FormData();
+      formData.append("file", targetFile);
+      formData.append("page_num", pageNum.toString());
+
+      const res = await fetch(`${apiBase}/api/pdf/render_page`, {
+        method: "POST",
+        body: formData
+      });
+
+      if (res.ok) {
+        const blob = await res.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        setPageImages(prev => ({ ...prev, [pageNum]: blobUrl }));
+      }
+    } catch (err) {
+      console.error(`Failed to render page image ${pageNum}:`, err);
+    } finally {
+      setIsImageLoading(false);
+    }
+  };
+
+  // Load image whenever currentPage changes
+  useEffect(() => {
+    if (file && !pageImages[currentPage]) {
+      fetchPageImage(file, currentPage);
+    }
+  }, [file, currentPage]);
 
   const handleFileSelect = async (selectedFile) => {
     if (!selectedFile) return;
     const isDocPdf = selectedFile.type === 'application/pdf' || selectedFile.name.toLowerCase().endsWith('.pdf');
     
+    // Revoke previous images
+    Object.values(pageImages).forEach(url => {
+      if (url && url.startsWith('blob:')) URL.revokeObjectURL(url);
+    });
+
     setFile(selectedFile);
     setIsPdf(isDocPdf);
-    setFileUrl(URL.createObjectURL(selectedFile));
+    setPageImages({});
     setCurrentPage(1);
     setTotalPages(1);
     setPageResults({});
@@ -95,7 +150,6 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
     setPageRangeInput("all");
     setSelectedPreset("all");
 
-    // If PDF, immediately fetch page count from server
     if (isDocPdf) {
       try {
         const apiBase = getApiBase();
@@ -112,6 +166,12 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
       } catch (err) {
         console.log("Could not fetch PDF info:", err);
       }
+      // Render page 1
+      fetchPageImage(selectedFile, 1);
+    } else {
+      // Standard image
+      const url = URL.createObjectURL(selectedFile);
+      setPageImages({ 1: url });
     }
   };
 
@@ -133,7 +193,7 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
   // Active target pages calculated from input
   const targetPages = parsePageSelection(pageRangeInput, totalPages);
 
-  // Batch / Range Automated Scanner
+  // Batch / Range Automated Scanner (Single page at a time)
   const handleStartAutoScan = async () => {
     if (!file || isScanning) return;
     if (targetPages.length === 0) {
@@ -152,9 +212,13 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
       if (abortControllerRef.current?.signal?.aborted) break;
 
       const p = targetPages[i];
-      setCurrentPage(p); // Flips the PDF preview live to this page!
+      
+      // 1. Switch viewer to this exact page and load high-res image
+      setCurrentPage(p);
       setCurrentScanningTarget(p);
+      await fetchPageImage(file, p);
 
+      // 2. Send high-res single page to Colab GPU model
       const formData = new FormData();
       formData.append("file", file);
       formData.append("page_num", p.toString());
@@ -234,7 +298,7 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
 
   const handleClear = () => {
     setFile(null);
-    setFileUrl(null);
+    setPageImages({});
     setPageResults({});
     setError(null);
     setCurrentPage(1);
@@ -254,8 +318,8 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
             <h1 className="text-sm font-semibold text-white flex items-center gap-2">
               <span>PDF & Document OCR Studio</span>
               {isPdf && (
-                <span className="text-[10px] bg-red-500/20 text-red-400 border border-red-500/30 px-1.5 py-0.2 rounded font-mono">
-                  PDF ({totalPages} {totalPages === 1 ? 'Page' : 'Pages'})
+                <span className="text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.2 rounded font-mono">
+                  {totalPages} Pages (Single-Page Fit View)
                 </span>
               )}
             </h1>
@@ -332,7 +396,7 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
             </div>
 
             <div className="flex items-center gap-2 text-[11px] text-neutral-500 font-mono pt-2">
-              <span className="bg-[#242424] px-2 py-0.5 rounded border border-[#333]">PDF (বহুপাতা)</span>
+              <span className="bg-[#242424] px-2 py-0.5 rounded border border-[#333]">PDF (যেকোনো সাইজ)</span>
               <span className="bg-[#242424] px-2 py-0.5 rounded border border-[#333]">PNG</span>
               <span className="bg-[#242424] px-2 py-0.5 rounded border border-[#333]">JPG</span>
               <span className="bg-[#242424] px-2 py-0.5 rounded border border-[#333]">WEBP</span>
@@ -427,18 +491,18 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
           </div>
 
           {/* ========================================================
-              SPLIT BODY (Left: PDF Viewer, Right: OCR Text)
+              SPLIT BODY (Left: Single-Page Fit View, Right: OCR Text)
               ======================================================== */}
           <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
             
             {/* ========================================================
-                LEFT COLUMN: PDF & Document Preview with Active Laser Beam
+                LEFT COLUMN: 100% Fit Single-Page Canvas (No Up-Down Scroll!)
                 ======================================================== */}
-            <div className="w-full md:w-1/2 flex flex-col border-r border-[#2d2d2d] bg-[#121212] overflow-hidden">
+            <div className="w-full md:w-1/2 flex flex-col border-r border-[#2d2d2d] bg-[#111111] overflow-hidden">
               {/* Page Navigation Bar */}
               <div className="h-10 border-b border-[#282828] bg-[#181818] px-4 flex items-center justify-between text-xs text-neutral-300 shrink-0">
                 <div className="flex items-center gap-2">
-                  <span className="font-semibold text-neutral-200">ডকুমেন্ট প্রিভিউ</span>
+                  <span className="font-semibold text-neutral-200">সিঙ্গেল পেজ ভিউ</span>
                   {totalPages > 1 && (
                     <span className="text-[11px] bg-[#222] border border-[#333] px-2 py-0.5 rounded-full font-mono text-emerald-400">
                       পেজ {currentPage} / {totalPages}
@@ -487,37 +551,39 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
                 )}
               </div>
 
-              {/* Document Frame with Laser Beam */}
-              <div className="flex-1 relative overflow-hidden p-3 bg-[#0d0d0d] flex items-center justify-center">
-                <div className="w-full h-full relative rounded-xl overflow-hidden border border-[#2a2a2a] bg-[#1e1e1e] shadow-2xl flex items-center justify-center">
-                  {/* Laser Animation when scanning */}
-                  {isScanning && (
-                    <>
-                      <div className="scanner-laser" />
-                      <div className="scanner-overlay" />
-                      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-emerald-950/95 border border-emerald-500/60 text-emerald-300 px-4 py-1.5 rounded-full text-xs font-mono flex items-center gap-2 shadow-2xl backdrop-blur-md">
-                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                        <span>পেজ {currentScanningTarget || currentPage} স্ক্যানিং হচ্ছে...</span>
-                      </div>
-                    </>
-                  )}
+              {/* Single Page High-Resolution Container (100% Fit, Zero Overflow) */}
+              <div className="flex-1 relative overflow-hidden p-4 bg-[#0a0a0a] flex items-center justify-center select-none">
+                {/* Visual Laser Scanner Beam positioned strictly inside container */}
+                {isScanning && (
+                  <>
+                    <div className="scanner-laser" />
+                    <div className="scanner-overlay" />
+                    <div className="absolute top-6 left-1/2 -translate-x-1/2 z-30 bg-emerald-950/95 border border-emerald-500/60 text-emerald-300 px-4 py-1.5 rounded-full text-xs font-mono flex items-center gap-2 shadow-2xl backdrop-blur-md">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                      <span>হাই-রেজোলিউশন পেজ {currentScanningTarget || currentPage} স্ক্যান হচ্ছে...</span>
+                    </div>
+                  </>
+                )}
 
-                  {/* PDF or Image Viewer */}
-                  {isPdf ? (
-                    <iframe
-                      key={`page-${currentPage}`}
-                      src={`${fileUrl}#page=${currentPage}&toolbar=0&navpanes=0&view=FitH`}
-                      title="PDF Preview"
-                      className="w-full h-full border-0 bg-white"
-                    />
-                  ) : (
+                {/* Page Image Display (100% Fit & Crisp) */}
+                {isImageLoading && !pageImages[currentPage] ? (
+                  <div className="flex flex-col items-center justify-center text-center space-y-2 text-neutral-500">
+                    <Loader2 className="w-8 h-8 animate-spin text-emerald-400" />
+                    <span className="text-xs font-mono">পেজ {currentPage} হাই-রেজোলিউশনে লোড হচ্ছে...</span>
+                  </div>
+                ) : pageImages[currentPage] ? (
+                  <div className="relative max-h-full max-w-full flex items-center justify-center rounded-lg shadow-2xl overflow-hidden border border-[#2a2a2a] bg-white">
                     <img 
-                      src={fileUrl} 
-                      alt="Document preview" 
-                      className="max-h-full max-w-full object-contain"
+                      src={pageImages[currentPage]} 
+                      alt={`Page ${currentPage}`} 
+                      className="max-h-[calc(100vh-180px)] max-w-full object-contain block"
                     />
-                  )}
-                </div>
+                  </div>
+                ) : (
+                  <div className="text-neutral-500 text-xs italic">
+                    পেজ প্রিভিউ প্রস্তুত হচ্ছে...
+                  </div>
+                )}
               </div>
             </div>
 
@@ -612,7 +678,7 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
                     </div>
                     <div className="text-xs font-medium text-neutral-300">এখনো কোনো টেক্সট স্ক্যান করা হয়নি।</div>
                     <div className="text-[11px] text-neutral-500">
-                      উপরে <span className="text-emerald-400 font-medium">'All', 'Odd', 'Even'</span> অথবা রেঞ্জ (যেমন: <span className="text-neutral-300 font-mono">1-10</span> বা <span className="text-neutral-300 font-mono">1,3,5,9</span>) দিয়ে <span className="text-emerald-400 font-medium">'অটো স্ক্যান শুরু করুন'</span> বাটনে ক্লিক করুন।
+                      উপরে <span className="text-emerald-400 font-medium">'All', 'Odd', 'Even'</span> অথবা রেঞ্জ দিয়ে <span className="text-emerald-400 font-medium">'অটো স্ক্যান শুরু করুন'</span> বাটনে ক্লিক করুন।
                     </div>
                   </div>
                 ) : (

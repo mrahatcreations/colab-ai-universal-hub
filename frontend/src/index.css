@@ -31,3 +31,37 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #4a4a4a;
 }
+
+/* Glowing Scanner Animation */
+@keyframes scanLaser {
+  0% {
+    top: 0%;
+    opacity: 0.8;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    top: 98%;
+    opacity: 0.8;
+  }
+}
+
+.scanner-laser {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, #10a37f, #34d399, #10a37f, transparent);
+  box-shadow: 0 0 15px 3px rgba(16, 163, 127, 0.7), 0 0 30px 6px rgba(52, 211, 153, 0.4);
+  animation: scanLaser 2.2s ease-in-out infinite alternate;
+  z-index: 20;
+}
+
+.scanner-overlay {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at center, rgba(16, 163, 127, 0.08) 0%, transparent 70%);
+  pointer-events: none;
+  z-index: 10;
+}

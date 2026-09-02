@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatView from './components/ChatView';
-import OcrModal from './components/OcrModal';
+import OcrWorkspace from './components/OcrWorkspace';
 import ModelHubModal from './components/ModelHubModal';
 import SettingsModal from './components/SettingsModal';
 import { getApiBase } from './config';
@@ -20,12 +20,11 @@ export default function App() {
     return chats.length > 0 ? chats[0].id : null;
   });
 
-  const [activeTab, setActiveTab] = useState("chat");
+  const [activeTab, setActiveTab] = useState("chat"); // 'chat' or 'ocr'
   const [activeModel, setActiveModel] = useState("None");
   const [vramInfo, setVramInfo] = useState(null);
 
   // Modals state
-  const [isOcrOpen, setIsOcrOpen] = useState(false);
   const [isModelHubOpen, setIsModelHubOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
@@ -60,7 +59,7 @@ export default function App() {
         setVramInfo(data.vram || null);
       }
     } catch (err) {
-      console.log("Backend offline or waiting...", err.message);
+      // Background offline or waiting
     }
   };
 
@@ -75,17 +74,32 @@ export default function App() {
   };
 
   const handleInsertOcrText = (text) => {
-    const activeChat = chats.find(c => c.id === currentChatId);
-    if (!activeChat) return;
+    let targetChatId = currentChatId;
+    if (!targetChatId) {
+      targetChatId = Date.now().toString();
+      const newChat = {
+        id: targetChatId,
+        title: "Document OCR",
+        messages: [],
+        createdAt: new Date().toISOString()
+      };
+      setChats(prev => [newChat, ...prev]);
+      setCurrentChatId(targetChatId);
+    }
+
+    const activeChat = chats.find(c => c.id === targetChatId) || { messages: [] };
 
     const ocrMessage = {
       role: 'user',
-      content: `[OCR Extracted Text]:\n${text}`
+      content: `[Extracted Document Text]:\n\n${text}\n\nঅনুগ্রহ করে এই ডকুমেন্টের বিষয়বস্তু সংক্ষেপে বিশ্লেষণ করুন।`
     };
 
-    handleUpdateChat(currentChatId, {
+    handleUpdateChat(targetChatId, {
+      title: activeChat.title === "New chat" ? "Document Analysis" : activeChat.title,
       messages: [...(activeChat.messages || []), ocrMessage]
     });
+
+    setActiveTab("chat");
   };
 
   const currentChat = chats.find(c => c.id === currentChatId) || chats[0];
@@ -102,30 +116,31 @@ export default function App() {
         setActiveTab={setActiveTab}
         activeModel={activeModel}
         onOpenModelHub={() => setIsModelHubOpen(true)}
-        onOpenOcr={() => setIsOcrOpen(true)}
+        onOpenOcr={() => setActiveTab("ocr")}
         onOpenSettings={() => setIsSettingsOpen(true)}
         vramInfo={vramInfo}
         onRefreshStatus={fetchStatus}
       />
 
-      {/* Main Chat Area */}
+      {/* Main Viewport */}
       <main className="flex-1 flex flex-col h-screen overflow-hidden">
-        <ChatView
-          chat={currentChat}
-          onUpdateChat={handleUpdateChat}
-          activeModel={activeModel}
-          onOpenModelHub={() => setIsModelHubOpen(true)}
-          onOpenOcr={() => setIsOcrOpen(true)}
-        />
+        {activeTab === "ocr" ? (
+          <OcrWorkspace
+            onInsertIntoChat={handleInsertOcrText}
+            onBackToChat={() => setActiveTab("chat")}
+          />
+        ) : (
+          <ChatView
+            chat={currentChat}
+            onUpdateChat={handleUpdateChat}
+            activeModel={activeModel}
+            onOpenModelHub={() => setIsModelHubOpen(true)}
+            onOpenOcr={() => setActiveTab("ocr")}
+          />
+        )}
       </main>
 
       {/* Modals */}
-      <OcrModal
-        isOpen={isOcrOpen}
-        onClose={() => setIsOcrOpen(false)}
-        onInsertIntoChat={handleInsertOcrText}
-      />
-
       <ModelHubModal
         isOpen={isModelHubOpen}
         onClose={() => setIsModelHubOpen(false)}

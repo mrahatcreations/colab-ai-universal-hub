@@ -382,17 +382,65 @@ async def ocr_endpoint(
         if ocr_reader is None:
             ocr_reader = easyocr.Reader(lang_list, gpu=torch.cuda.is_available())
 
-        image_bytes = await file.read()
-        results = ocr_reader.readtext(image_bytes)
-        lines = [r[1] for r in results]
-        extracted_text = "\n".join(lines)
+        file_bytes = await file.read()
+        is_pdf = file.filename.lower().endswith(".pdf") or "pdf" in (file.content_type or "").lower()
 
-        return {
-            "status": "success",
-            "filename": file.filename,
-            "text": extracted_text,
-            "lines_count": len(lines)
-        }
+        if is_pdf:
+            try:
+                import pypdfium2 as pdfium
+                import numpy as np
+            except ImportError:
+                raise HTTPException(
+                    status_code=500,
+                    detail="pypdfium2 লাইব্রেরি পাওয়া যায়নি। (`pip install pypdfium2` রান করুন)"
+                )
+
+            pdf = pdfium.PdfDocument(file_bytes)
+            total_pages = len(pdf)
+            pages_data = []
+
+            for i in range(total_pages):
+                page = pdf[i]
+                # High resolution render (scale=2.0) for sharp OCR
+                pil_image = page.render(scale=2.0).to_pil()
+                np_image = np.array(pil_image)
+                results = ocr_reader.readtext(np_image)
+                lines = [r[1] for r in results]
+                p_text = "\n".join(lines)
+                pages_data.append({
+                    "page_num": i + 1,
+                    "text": p_text,
+                    "lines_count": len(lines)
+                })
+
+            full_text = "\n\n--- Page Break ---\n\n".join([p["text"] for p in pages_data])
+            return {
+                "status": "success",
+                "is_pdf": True,
+                "filename": file.filename,
+                "total_pages": total_pages,
+                "pages": pages_data,
+                "text": full_text
+            }
+        else:
+            # Single Image processing
+            results = ocr_reader.readtext(file_bytes)
+            lines = [r[1] for r in results]
+            extracted_text = "\n".join(lines)
+
+            return {
+                "status": "success",
+                "is_pdf": False,
+                "filename": file.filename,
+                "total_pages": 1,
+                "pages": [{
+                    "page_num": 1,
+                    "text": extracted_text,
+                    "lines_count": len(lines)
+                }],
+                "text": extracted_text,
+                "lines_count": len(lines)
+            }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"OCR failed: {str(e)}")
 

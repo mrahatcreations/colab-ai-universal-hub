@@ -1,0 +1,22 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Models directory (downloaded weights should not be committed to git)
+downloaded_models/
+
+# Environment and sensitive tokens
+.env
+.env.local
+
+# Cloudflared deb package
+*.deb
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini

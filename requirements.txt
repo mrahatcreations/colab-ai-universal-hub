@@ -1,0 +1,9 @@
+gradio>=4.20.0
+transformers>=4.40.0
+accelerate>=0.28.0
+bitsandbytes>=0.43.0
+easyocr>=1.7.1
+torch>=2.2.0
+huggingface_hub>=0.22.0
+uvicorn>=0.28.0
+fastapi>=0.110.0

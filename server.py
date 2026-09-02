@@ -182,6 +182,12 @@ def load_model_endpoint(req: LoadModelRequest):
     if not repo_id:
         raise HTTPException(status_code=400, detail="repo_id cannot be empty")
 
+    # Safety net: Unsloth bnb-4bit checkpoints have broken LinearFP4 visual layers with standard transformers
+    is_vl = any(term in repo_id.lower() for term in ["vl", "vision"])
+    if "unsloth" in repo_id.lower() and is_vl:
+        print(f"[!] Unsloth BNB-4bit vision checkpoints have broken LinearFP4 visual layers in standard transformers. Automatically switching to official 'Qwen/Qwen2.5-VL-3B-Instruct' for rock-solid native FP16 inference!", flush=True)
+        repo_id = "Qwen/Qwen2.5-VL-3B-Instruct"
+
     clear_vram()
 
     local_path = MODELS_DIR / repo_id.replace("/", "--")

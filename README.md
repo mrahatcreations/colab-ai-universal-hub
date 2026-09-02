@@ -1,5 +1,7 @@
 # 🌌 Colab AI Universal Hub
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/mrahatcreations/colab-ai-universal-hub/blob/main/colab_runner.ipynb)
+
 একটি প্রফেশনাল, মডুলার ও অপ্টিমাইজড মাল্টি-টাস্ক এআই ড্যাশবোর্ড যা Google Colab (T4 GPU)-এ নির্বিঘ্নে চলবে এবং Cloudflare Zero Trust টানেলের মাধ্যমে কাস্টম সাবডোমেইনে (`https://colabapi.iunisphere.com`) লাইভ থাকবে।
 
 ---

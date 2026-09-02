@@ -385,6 +385,18 @@ Core Instructions:
       const decoder = new TextDecoder("utf-8");
       let streamAccumulator = "";
 
+// Clean reasoning thoughts (<think>...</think> or raw internal monologue) from DeepSeek-R1
+function extractCleanOutput(rawText) {
+  if (!rawText) return "";
+  if (rawText.includes("</think>")) {
+    return rawText.split("</think>").slice(1).join("</think>").trimStart();
+  }
+  if (/^(?:<think>|Okay|Let me|I need to|First|The text|Thinking)/i.test(rawText.trim())) {
+    return "🧠 *এআই প্রতিটি বাক্য ও বানান বিশ্লেষণ করছে...*";
+  }
+  return rawText;
+}
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -399,18 +411,18 @@ Core Instructions:
               const parsed = JSON.parse(dataStr);
               if (parsed.token) {
                 streamAccumulator += parsed.token;
-                const cleanDisplay = streamAccumulator.replace(/<think>[\s\S]*?<\/think>/gi, '').trimStart();
+                const cleanDisplay = extractCleanOutput(streamAccumulator);
                 setPageResults(prev => ({
                   ...prev,
-                  [pageKey]: cleanDisplay || streamAccumulator
+                  [pageKey]: cleanDisplay
                 }));
               }
             } catch {
               streamAccumulator += dataStr;
-              const cleanDisplay = streamAccumulator.replace(/<think>[\s\S]*?<\/think>/gi, '').trimStart();
+              const cleanDisplay = extractCleanOutput(streamAccumulator);
               setPageResults(prev => ({
                 ...prev,
-                [pageKey]: cleanDisplay || streamAccumulator
+                [pageKey]: cleanDisplay
               }));
             }
           }

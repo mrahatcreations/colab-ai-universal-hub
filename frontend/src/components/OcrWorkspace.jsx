@@ -312,11 +312,6 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
             }
           }
           setScanProgress({ done: i + 1, total: targetPages.length });
-
-          // Immediately & automatically run AI to understand sentences, fix spellings, and build book structure!
-          if (autoAiProofread && !abortControllerRef.current?.signal?.aborted && data.text) {
-            await formatTextWithAi(data.text, p);
-          }
         }
       } catch (err) {
         if (err.name === 'AbortError') break;
@@ -337,42 +332,7 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
     setCurrentScanningTarget(null);
   };
 
-  // Split page text into focused atomic chunks (1 question or section at a time)
-  const splitIntoAtomicChunks = (rawText) => {
-    if (!rawText || !rawText.trim()) return [];
-    const lines = rawText.split('\n');
-    const chunks = [];
-    let current = [];
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (!line) continue;
-
-      // Question start or major section header marks a new atomic chunk
-      const isQuestionStart = /^(\d{1,3}[\.\)]|প্রশ্ন\s*[:\-\s]*\d*)/i.test(line);
-      const isSectionHeader = /^(\#\#|সূচিপত্র|বিষয়|বিভাগ|---+\s*\[?কলাম)/i.test(line);
-
-      if ((isQuestionStart || isSectionHeader) && current.length > 0) {
-        chunks.push(current.join('\n'));
-        current = [line];
-      } else {
-        current.push(line);
-        // Flush long prose chunks so context remains small & sharp
-        if (current.length >= 8 && !isQuestionStart) {
-          chunks.push(current.join('\n'));
-          current = [];
-        }
-      }
-    }
-
-    if (current.length > 0) {
-      chunks.push(current.join('\n'));
-    }
-
-    return chunks.length > 0 ? chunks : [rawText];
-  };
-
-  // Universal Atomic Chunk-by-Chunk AI Document Refinement Engine
+  // Universal Fast AI Document Refinement & Proofreading Engine
   const formatTextWithAi = async (textToFormat, targetPageNum = null) => {
     if (!textToFormat || !textToFormat.trim()) return;
 
@@ -380,11 +340,9 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
     setFormatTab("formatted");
 
     const pageKey = targetPageNum || currentPage;
-    const atomicChunks = splitIntoAtomicChunks(textToFormat);
-    let pageFullAccumulator = "";
 
     const systemPrompt = `You are an expert multilingual document comprehension and editorial intelligence engine.
-Your task: Read this short text chunk (representing a single question, section, or paragraph from a book).
+Your task is to transform imperfect, raw OCR text from a book page into an impeccably structured, clean, and publication-ready digital document using your own context-aware reasoning.
 
 Core Instructions:
 1. Sentence-Level Semantic Comprehension & Automatic Typo Correction:
@@ -403,74 +361,59 @@ Core Instructions:
 3. Pure Output:
    - Output ONLY the finished, impeccably formatted Markdown text. Do NOT include any introductory greetings, commentary, or conversational remarks.`;
 
+    const userMessage = `Process, correct all spelling errors based on sentence context, and intelligently structure this book page:\n\n${textToFormat}`;
+
     try {
       const apiBase = getApiBase();
+      const res = await fetch(`${apiBase}/api/chat/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userMessage }
+          ],
+          max_new_tokens: 2048,
+          temperature: 0.2
+        }),
+        signal: abortControllerRef.current?.signal
+      });
 
-      for (let cIdx = 0; cIdx < atomicChunks.length; cIdx++) {
-        if (abortControllerRef.current?.signal?.aborted) break;
+      if (!res.ok) throw new Error("AI Formatting failed.");
 
-        const chunkText = atomicChunks[cIdx];
-        const userMessage = `Process, correct, and intelligently structure this small text chunk:\n\n${chunkText}`;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let streamAccumulator = "";
 
-        const res = await fetch(`${apiBase}/api/chat/stream`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: userMessage }
-            ],
-            max_new_tokens: 1024,
-            temperature: 0.2
-          }),
-          signal: abortControllerRef.current?.signal
-        });
-
-        if (!res.ok) continue;
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder("utf-8");
-        let chunkAccumulator = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          const chunkStr = decoder.decode(value, { stream: true });
-          const lines = chunkStr.split("\n");
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (trimmed.startsWith("data: ")) {
-              const dataStr = trimmed.slice(6).trim();
-              if (dataStr === "[DONE]") break;
-              try {
-                const parsed = JSON.parse(dataStr);
-                if (parsed.token) {
-                  chunkAccumulator += parsed.token;
-                  const cleanChunk = chunkAccumulator.replace(/<think>[\s\S]*?<\/think>/gi, '').trimStart();
-                  setPageResults(prev => ({
-                    ...prev,
-                    [pageKey]: (pageFullAccumulator ? pageFullAccumulator + "\n\n---\n\n" : "") + cleanChunk
-                  }));
-                }
-              } catch {
-                chunkAccumulator += dataStr;
-                const cleanChunk = chunkAccumulator.replace(/<think>[\s\S]*?<\/think>/gi, '').trimStart();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunkStr = decoder.decode(value, { stream: true });
+        const lines = chunkStr.split("\n");
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith("data: ")) {
+            const dataStr = trimmed.slice(6).trim();
+            if (dataStr === "[DONE]") break;
+            try {
+              const parsed = JSON.parse(dataStr);
+              if (parsed.token) {
+                streamAccumulator += parsed.token;
+                const cleanDisplay = streamAccumulator.replace(/<think>[\s\S]*?<\/think>/gi, '').trimStart();
                 setPageResults(prev => ({
                   ...prev,
-                  [pageKey]: (pageFullAccumulator ? pageFullAccumulator + "\n\n---\n\n" : "") + cleanChunk
+                  [pageKey]: cleanDisplay || streamAccumulator
                 }));
               }
+            } catch {
+              streamAccumulator += dataStr;
+              const cleanDisplay = streamAccumulator.replace(/<think>[\s\S]*?<\/think>/gi, '').trimStart();
+              setPageResults(prev => ({
+                ...prev,
+                [pageKey]: cleanDisplay || streamAccumulator
+              }));
             }
           }
-        }
-
-        const finalCleanChunk = chunkAccumulator.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-        if (finalCleanChunk) {
-          pageFullAccumulator = (pageFullAccumulator ? pageFullAccumulator + "\n\n---\n\n" : "") + finalCleanChunk;
-          setPageResults(prev => ({
-            ...prev,
-            [pageKey]: pageFullAccumulator
-          }));
         }
       }
     } catch (err) {

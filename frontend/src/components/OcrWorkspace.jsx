@@ -408,11 +408,54 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
     const pageData = renderedPages[pageKey];
     const apiBase = getApiBase();
 
+    const academicPrompt = `You are an expert academic document transcriber and editorial proofreader specializing in Bangladeshi university admission test question banks (DU B-Unit / Kha-Unit).
+Your task is to transform imperfect book pages or raw OCR into publication-ready, impeccably structured digital Markdown.
+
+STRICT EDITORIAL RULES:
+1. TWO-COLUMN LAYOUT DISCIPLINE:
+   - When a page has two printed columns, transcribe Column 1 (Left) completely from top to bottom first.
+   - Then transcribe Column 2 (Right) completely from top to bottom.
+   - Discard repeating page headers (e.g. 'প্রশ্নব্যাংক: কলা, আইন ও সামাজিক বিজ্ঞান অনুষদ'), footers, page numbers, and publisher watermarks/ads (e.g. 'প্যানাসিয়া পাবলিকেশন্স', 'তোমার অধ্যয়নের সহযোগী').
+
+2. FLAWLESS BENGALI SPELLINGS & CONJUNCTS (যুক্তবর্ণ):
+   - Contextually correct all broken Bengali conjuncts, split words, and OCR corruptions (e.g., আখতারুজ্জামান ইলিয়াস, মুক্তিযুদ্ধ, গল্প, রোকেয়া সাখাওয়াত হোসেন, শরৎচন্দ্র চট্টোপাধ্যায়, রবীন্দ্রনাথ ঠাকুর, মাইকেল মধুসূদন দত্ত, ড. মুহাম্মদ ইউনূস, থ্রি-জিরো তত্ত্ব, সৈয়দা রিজওয়ানা হাসান, ফরিদা আখতার, শারমীন মুরশিদ, নূরজাহান বেগম, সৈয়দ রেফাত আহমেদ, বেনজির ভুট্টো, ইত্যাদি).
+   - Ensure 100% correct spelling, Dari (।), quotation marks, and grammar.
+
+3. STRICT MCQ OPTIONS FORMAT:
+   - EVERY option MUST be on its own separate line:
+     - **(A)** [বিকল্প]
+     - **(B)** [বিকল্প]
+     - **(C)** [বিকল্প]
+     - **(D)** [বিকল্প]
+   - NEVER combine multiple options into a single line (e.g., never write '- **A.** ... B ...').
+
+4. CLEAN ANSWER & EXPLANATION BLOCKS:
+   - Format Bengali answers as:
+     > 💡 **উত্তর:** (A)
+     > 📖 **ব্যাখ্যা:** [বিশদ ও নির্ভুল ব্যাকরণসম্মত ব্যাখ্যা]
+   - Format English answers as:
+     > 💡 **Ans:** (A)
+     > 📖 **Expl:** [Clear grammatical explanation]
+   - Never output corrupted OCR artifacts like 'উব্র', 'উবর', 'ডওতর', 'ডবগর', 'ডতর', or 'Ans: এ'.
+
+5. TABLES FOR VOCABULARY & INDICES:
+   - For word meanings (শব্দার্থ), synonyms/antonyms, or index lists, ALWAYS render them as clean Markdown tables:
+     | শব্দ | অর্থ |
+     | :--- | :--- |
+     | সোপান | সিঁড়ি |
+     | কলেবর | দেহ, শরীর |
+     | অমানিশীথ | ঘোর অন্ধকার রাত |
+     | বসন | কাপড়, বস্ত্র |
+
+6. PURE CLEAN OUTPUT:
+   - Output ONLY the finished Markdown text. Do NOT include any conversational preamble, notes, or meta-comments.`;
+
     // 1. Direct Multimodal Vision Model (Qwen2.5-VL) if page image is available
     if (pageData?.blob) {
       try {
         const formData = new FormData();
         formData.append("file", pageData.blob, `page_${pageKey}.png`);
+        formData.append("prompt", academicPrompt);
 
         const vRes = await fetch(`${apiBase}/api/vision/ocr`, {
           method: "POST",
@@ -462,26 +505,6 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
     }
 
     // 2. Text LLM Fallback (DeepSeek / Qwen Text)
-    const systemPrompt = `You are an expert multilingual document comprehension and editorial intelligence engine.
-Your task is to transform imperfect, raw OCR text from a book page into an impeccably structured, clean, and publication-ready digital document using your own context-aware reasoning.
-
-Core Instructions:
-1. Sentence-Level Semantic Comprehension & Automatic Typo Correction:
-   - Carefully read and understand the complete sentence meaning, subject matter, and grammar.
-   - Automatically correct any misrecognized OCR spellings, broken Bengali conjuncts (যুক্তবর্ণ), split compound words, and misread letters based on your semantic understanding of the sentence (e.g. identify government ministries, historical political figures, exam details, literary quotes).
-   - If two different columns or topics collided into the same line, separate them into their respective distinct questions or sections.
-
-2. Book Layout, Gaps, and Structure:
-   - Provide generous vertical breathing room (blank line gaps) between every question and section, exactly like a printed book.
-   - For academic tests/questions:
-     * Put each question on its own clean header: ### 🔹 প্রশ্ন [নম্বর]: [প্রশ্ন]
-     * Format option choices clearly on separate lines: - **(A)** ... - **(B)** ...
-     * Format answer and explanation in a clean quote block: > 💡 **উত্তর:** ... > 📖 **ব্যাখ্যা:** ...
-   - For tables of contents or indices: Render as aligned Markdown tables with generous spacing.
-
-3. Pure Output:
-   - Output ONLY the finished, impeccably formatted Markdown text. Do NOT include any introductory greetings, commentary, or conversational remarks.`;
-
     const userMessage = `Process, correct all spelling errors based on sentence context, and intelligently structure this book page:\n\n${textToFormat}`;
 
     try {
@@ -490,7 +513,7 @@ Core Instructions:
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messages: [
-            { role: "system", content: systemPrompt },
+            { role: "system", content: academicPrompt },
             { role: "user", content: userMessage }
           ],
           max_new_tokens: 2048,

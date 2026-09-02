@@ -7,45 +7,50 @@ if sys.platform == "win32":
         pass
 import time
 import subprocess
-from config import CLOUDFLARE_TUNNEL_TOKEN, SERVER_PORT, DOMAIN
-from tunnel.cloudflare import install_cloudflared, start_tunnel
+from config import CLOUDFLARE_TUNNEL_TOKEN, SERVER_HOST, SERVER_PORT, DOMAIN
+from tunnel.cloudflare import start_tunnel
+from ui.layout import build_app
 
 def main():
     print("=" * 65)
     print("🚀 Colab AI Universal Hub & Cloudflare Tunnel Runner")
     print("=" * 65)
 
-    # 1. Kill any existing process on port
+    # 1. Kill any existing process on port 8000
     subprocess.run(f"fuser -k {SERVER_PORT}/tcp 2>/dev/null", shell=True, check=False)
     time.sleep(1)
 
-    # 2. Launch App in Background
-    print(f"[*] Starting Gradio App on port {SERVER_PORT}...")
-    app_proc = subprocess.Popen([sys.executable, "app.py"])
-    time.sleep(4)
-
-    # 3. Launch Cloudflare Tunnel
+    # 2. Launch Cloudflare Tunnel in background
     token = os.environ.get("CLOUDFLARE_TUNNEL_TOKEN", CLOUDFLARE_TUNNEL_TOKEN)
-    if not token or "YOUR_" in token:
-        print("\n⚠️ সতর্কবার্তা: Cloudflare টোকেন দেওয়া হয়নি!")
-        print("দয়া করে config.py-তে অথবা এনভায়রনমেন্টে CLOUDFLARE_TUNNEL_TOKEN সেট করুন।")
-        print(f"লোকাল ড্যাশবোর্ড লিসেন করছে: http://127.0.0.1:{SERVER_PORT}")
-        app_proc.wait()
-        return
-
-    print(f"[*] Connecting Cloudflare Tunnel for https://{DOMAIN}...")
-    tunnel_proc = start_tunnel(token)
+    tunnel_proc = None
+    if token and "YOUR_" not in token:
+        print(f"[*] Connecting Cloudflare Tunnel for https://{DOMAIN}...")
+        try:
+            tunnel_proc = start_tunnel(token)
+            time.sleep(2)
+        except Exception as e:
+            print(f"[!] Warning: Could not start tunnel: {e}")
+    else:
+        print("[!] No Cloudflare token provided. Running in local mode only.")
 
     print("\n" + "=" * 65)
-    print(f"🎉 আপনার ড্যাশবোর্ড এখন লাইভ: https://{DOMAIN}")
-    print("=" * 65)
+    print(f"🎉 ড্যাশবোর্ড চালু হচ্ছে: https://{DOMAIN}")
+    print(f"👉 লোকাল পোর্ট: http://{SERVER_HOST}:{SERVER_PORT}")
+    print("=" * 65 + "\n")
 
+    # 3. Launch Gradio App in foreground
+    app = build_app()
     try:
-        app_proc.wait()
+        app.launch(
+            server_name=SERVER_HOST,
+            server_port=SERVER_PORT,
+            share=False
+        )
     except KeyboardInterrupt:
         print("\n[!] Shutting down...")
-        app_proc.terminate()
-        tunnel_proc.terminate()
+    finally:
+        if tunnel_proc:
+            tunnel_proc.terminate()
 
 if __name__ == "__main__":
     main()

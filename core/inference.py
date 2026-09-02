@@ -15,13 +15,17 @@ def stream_chat_response(message: str, history: list, max_new_tokens: int = 512,
         return
 
     try:
-        # Build chat message structure
+        # Build chat message structure (Gradio 4 & 5 compatible)
         messages = []
-        for user_msg, bot_msg in history:
-            if user_msg:
-                messages.append({"role": "user", "content": user_msg})
-            if bot_msg:
-                messages.append({"role": "assistant", "content": bot_msg})
+        for turn in history:
+            if isinstance(turn, dict):
+                messages.append(turn)
+            elif isinstance(turn, (list, tuple)) and len(turn) >= 2:
+                user_msg, bot_msg = turn[0], turn[1]
+                if user_msg:
+                    messages.append({"role": "user", "content": user_msg})
+                if bot_msg:
+                    messages.append({"role": "assistant", "content": bot_msg})
         messages.append({"role": "user", "content": message})
 
         # Apply tokenizer chat template

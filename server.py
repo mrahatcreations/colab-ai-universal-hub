@@ -165,7 +165,7 @@ def list_models():
 
 @app.post("/api/models/load")
 def load_model_endpoint(req: LoadModelRequest):
-    global CURRENT_MODEL, CURRENT_TOKENIZER, ACTIVE_MODEL_NAME
+    global CURRENT_MODEL, CURRENT_TOKENIZER, ACTIVE_MODEL_NAME, CURRENT_PROCESSOR, IS_VISION_MODEL
     repo_id = req.repo_id.strip()
     if not repo_id:
         raise HTTPException(status_code=400, detail="repo_id cannot be empty")
@@ -332,16 +332,19 @@ async def chat_stream_endpoint(req: ChatStreamRequest):
         raise HTTPException(status_code=400, detail="Must provide 'messages' or 'prompt'")
 
     try:
-        if hasattr(CURRENT_TOKENIZER, "apply_chat_template") and CURRENT_TOKENIZER.chat_template:
+        if IS_VISION_MODEL and CURRENT_PROCESSOR is not None:
+            prompt_text = CURRENT_PROCESSOR.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            inputs = CURRENT_PROCESSOR(text=[prompt_text], return_tensors="pt").to(CURRENT_MODEL.device)
+        elif hasattr(CURRENT_TOKENIZER, "apply_chat_template") and CURRENT_TOKENIZER.chat_template:
             prompt_text = CURRENT_TOKENIZER.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            inputs = CURRENT_TOKENIZER(prompt_text, return_tensors="pt").to(CURRENT_MODEL.device)
         else:
             prompt_text = ""
             for msg in messages:
                 role = "User" if msg["role"] == "user" else "Assistant"
                 prompt_text += f"{role}: {msg['content']}\n"
             prompt_text += "Assistant: "
-
-        inputs = CURRENT_TOKENIZER(prompt_text, return_tensors="pt").to(CURRENT_MODEL.device)
+            inputs = CURRENT_TOKENIZER(prompt_text, return_tensors="pt").to(CURRENT_MODEL.device)
         streamer = TextIteratorStreamer(
             CURRENT_TOKENIZER,
             timeout=60.0,

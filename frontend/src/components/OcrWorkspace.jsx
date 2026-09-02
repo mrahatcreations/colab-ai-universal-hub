@@ -56,6 +56,52 @@ function parsePageSelection(inputStr, maxPages) {
   return Array.from(pagesSet).sort((a, b) => a - b);
 }
 
+// Pure Heuristic Book Layout Formatter: parses and structures questions, options, headers, and explanations with generous spacing
+function formatBookPageContent(rawText) {
+  if (!rawText) return "";
+
+  // 1. Clean horizontal column dividers
+  let clean = rawText
+    .replace(/(?:^|\n)(---+\s*(?:\[?কলাম|Page|পৃষ্ঠা)[^\n]*)/gi, '\n\n$1\n\n')
+    // Split options on same line (e.g. "A. ঢাকা B. চট্টগ্রাম C. খুলনা D. রাজশাহী")
+    .replace(/\s+([A-D][\.\)])\s+/g, '\n  - **$1** ')
+    .replace(/^([A-D][\.\)])\s+/gm, '  - **$1** ');
+
+  const rawLines = clean.split('\n');
+  const formattedLines = [];
+
+  for (let i = 0; i < rawLines.length; i++) {
+    const line = rawLines[i].trim();
+    if (!line) continue;
+
+    // Question Number Start (e.g. "১.", "২.", "1.", "10.", "১৬.", "প্রশ্ন")
+    if (/^(\d{1,3}[\.\)]\s*|প্রশ্ন\s*[:\-\s]*\d*)/i.test(line)) {
+      formattedLines.push(`\n\n---\n\n### 🔹 ${line}\n`);
+      continue;
+    }
+
+    // Answer / Explanation
+    if (/^(?:উত্তর|Ans|Answer)\s*[:\-]/i.test(line)) {
+      formattedLines.push(`\n> 💡 **${line}**`);
+      continue;
+    }
+    if (/^(?:ব্যাখ্যা|Explanation)\s*[:\-]/i.test(line)) {
+      formattedLines.push(`> 📖 **${line}**\n`);
+      continue;
+    }
+
+    // Book, Subject or Exam Header
+    if (/^(?:ঢাকা বিশ্ববিদ্যালয়|প্রশ্নব্যাংক|ভর্তি পরীক্ষা|সূচিপত্র|বিষয়|বিভাগ পরিবর্তন|কলা,\s*আইন)/i.test(line)) {
+      formattedLines.push(`\n## 📌 ${line}\n`);
+      continue;
+    }
+
+    formattedLines.push(line);
+  }
+
+  return formattedLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
   const [file, setFile] = useState(null);
   const [isPdf, setIsPdf] = useState(false);
@@ -79,6 +125,7 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
   const [viewMode, setViewMode] = useState("current"); // "current" or "all"
   const [formatTab, setFormatTab] = useState("formatted"); // 'formatted' or 'raw'
   const [isAiFormatting, setIsAiFormatting] = useState(false);
+  const [autoAiProofread, setAutoAiProofread] = useState(true); // Automatically runs AI to understand sentences and correct spellings
   
   const [languages, setLanguages] = useState("en,bn");
   const [copied, setCopied] = useState(false);
@@ -244,7 +291,8 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
 
         if (res.ok) {
           const data = await res.json();
-          const rawLines = (data.text || "").split("\n").filter(Boolean);
+          const structuredText = formatBookPageContent(data.text || "");
+          const rawLines = structuredText.split("\n");
           
           if (rawLines.length === 0) {
             setPageResults(prev => ({ ...prev, [p]: "কোনো টেক্সট পাওয়া যায়নি।" }));
@@ -259,11 +307,16 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
                 [p]: streamAccumulator
               }));
 
-              // 35ms realistic typewriter streaming pace per line
-              await new Promise(r => setTimeout(r, 35));
+              // 20ms smooth typewriter streaming pace
+              await new Promise(r => setTimeout(r, 20));
             }
           }
           setScanProgress({ done: i + 1, total: targetPages.length });
+
+          // Immediately & automatically run AI to understand sentences, fix spellings, and build book structure!
+          if (autoAiProofread && !abortControllerRef.current?.signal?.aborted && data.text) {
+            await formatTextWithAi(data.text, p);
+          }
         }
       } catch (err) {
         if (err.name === 'AbortError') break;
@@ -284,86 +337,140 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
     setCurrentScanningTarget(null);
   };
 
-  // Universal AI Document Intelligence & Structuring Engine (DeepSeek-R1)
+  // Split page text into focused atomic chunks (1 question or section at a time)
+  const splitIntoAtomicChunks = (rawText) => {
+    if (!rawText || !rawText.trim()) return [];
+    const lines = rawText.split('\n');
+    const chunks = [];
+    let current = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+
+      // Question start or major section header marks a new atomic chunk
+      const isQuestionStart = /^(\d{1,3}[\.\)]|প্রশ্ন\s*[:\-\s]*\d*)/i.test(line);
+      const isSectionHeader = /^(\#\#|সূচিপত্র|বিষয়|বিভাগ|---+\s*\[?কলাম)/i.test(line);
+
+      if ((isQuestionStart || isSectionHeader) && current.length > 0) {
+        chunks.push(current.join('\n'));
+        current = [line];
+      } else {
+        current.push(line);
+        // Flush long prose chunks so context remains small & sharp
+        if (current.length >= 8 && !isQuestionStart) {
+          chunks.push(current.join('\n'));
+          current = [];
+        }
+      }
+    }
+
+    if (current.length > 0) {
+      chunks.push(current.join('\n'));
+    }
+
+    return chunks.length > 0 ? chunks : [rawText];
+  };
+
+  // Universal Atomic Chunk-by-Chunk AI Document Refinement Engine
   const formatTextWithAi = async (textToFormat, targetPageNum = null) => {
     if (!textToFormat || !textToFormat.trim()) return;
 
     setIsAiFormatting(true);
     setFormatTab("formatted");
 
-    const systemPrompt = `You are an advanced multilingual document intelligence and editorial refinement engine.
+    const pageKey = targetPageNum || currentPage;
+    const atomicChunks = splitIntoAtomicChunks(textToFormat);
+    let pageFullAccumulator = "";
 
-Your task is to transform imperfect, noisy raw OCR text (Bengali, English, or mixed) into an impeccably structured, clean, and publication-ready digital document using your own context-aware reasoning.
+    const systemPrompt = `You are an expert multilingual document comprehension and editorial intelligence engine.
+Your task: Read this short text chunk (representing a single question, section, or paragraph from a book).
 
 Core Instructions:
-1. Contextual Typo & Artifact Correction:
-   - Identify the nature, genre, and topic of the text.
-   - Automatically correct OCR recognition artifacts, broken conjuncts (যুক্তবর্ণ), split compound words, and misrecognized characters based on semantic and grammatical context (e.g. correcting misread author names, book titles, or technical terminology).
+1. Sentence-Level Semantic Comprehension & Automatic Typo Correction:
+   - Carefully read and understand the complete sentence meaning, subject matter, and grammar.
+   - Automatically correct any misrecognized OCR spellings, broken Bengali conjuncts (যুক্তবর্ণ), split compound words, and misread letters based on your semantic understanding of the sentence (e.g. identify government ministries, historical political figures, exam details, literary quotes).
+   - If two different columns or topics collided into the same line, separate them into their respective distinct questions or sections.
 
-2. Universal & Adaptive Structuring:
-   - Do NOT force rigid or unnatural templates. Intelligently adapt your structure to what the text truly is:
-     * If the text contains questions/MCQs: Present them with clear hierarchy—question stem, clean option choices (A, B, C, D), highlighted correct answers, and well-separated explanations.
-     * If the text represents tables of contents, indices, or structured lists: Format them into clean, aligned Markdown tables.
-     * If the text is literary prose, an essay, or an article: Organize with logical headings, clean paragraphs, and styled blockquotes.
-     * If there are distinct sections or subjects: Separate them with clear sectional headers and meaningful contextual tags.
+2. Book Layout, Gaps, and Structure:
+   - Provide generous vertical breathing room (blank line gaps) between every question and section, exactly like a printed book.
+   - For academic tests/questions:
+     * Put each question on its own clean header: ### 🔹 প্রশ্ন [নম্বর]: [প্রশ্ন]
+     * Format option choices clearly on separate lines: - **(A)** ... - **(B)** ...
+     * Format answer and explanation in a clean quote block: > 💡 **উত্তর:** ... > 📖 **ব্যাখ্যা:** ...
+   - For tables of contents or indices: Render as aligned Markdown tables with generous spacing.
 
-3. Purity & Directness:
-   - Output ONLY the polished, structured Markdown text. Do NOT include any introductory pleasantries, conversational remarks, or concluding commentary.`;
-
-    const userMessage = `Process, correct, and intelligently structure this OCR transcription:\n\n${textToFormat}`;
+3. Pure Output:
+   - Output ONLY the finished, impeccably formatted Markdown text. Do NOT include any introductory greetings, commentary, or conversational remarks.`;
 
     try {
       const apiBase = getApiBase();
-      const res = await fetch(`${apiBase}/api/chat/stream`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userMessage }
-          ],
-          max_new_tokens: 2048,
-          temperature: 0.2
-        })
-      });
 
-      if (!res.ok) throw new Error("AI Formatting failed.");
+      for (let cIdx = 0; cIdx < atomicChunks.length; cIdx++) {
+        if (abortControllerRef.current?.signal?.aborted) break;
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder("utf-8");
-      let formattedAccumulator = "";
-      const pageKey = targetPageNum || currentPage;
+        const chunkText = atomicChunks[cIdx];
+        const userMessage = `Process, correct, and intelligently structure this small text chunk:\n\n${chunkText}`;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split("\n");
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (trimmed.startsWith("data: ")) {
-            const dataStr = trimmed.slice(6).trim();
-            if (dataStr === "[DONE]") break;
-            try {
-              const parsed = JSON.parse(dataStr);
-              if (parsed.token) {
-                formattedAccumulator += parsed.token;
-                // Strip <think>...</think> reasoning tags for clean output
-                const cleanDisplay = formattedAccumulator.replace(/<think>[\s\S]*?<\/think>/gi, '').trimStart();
+        const res = await fetch(`${apiBase}/api/chat/stream`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: userMessage }
+            ],
+            max_new_tokens: 1024,
+            temperature: 0.2
+          }),
+          signal: abortControllerRef.current?.signal
+        });
+
+        if (!res.ok) continue;
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let chunkAccumulator = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunkStr = decoder.decode(value, { stream: true });
+          const lines = chunkStr.split("\n");
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed.startsWith("data: ")) {
+              const dataStr = trimmed.slice(6).trim();
+              if (dataStr === "[DONE]") break;
+              try {
+                const parsed = JSON.parse(dataStr);
+                if (parsed.token) {
+                  chunkAccumulator += parsed.token;
+                  const cleanChunk = chunkAccumulator.replace(/<think>[\s\S]*?<\/think>/gi, '').trimStart();
+                  setPageResults(prev => ({
+                    ...prev,
+                    [pageKey]: (pageFullAccumulator ? pageFullAccumulator + "\n\n---\n\n" : "") + cleanChunk
+                  }));
+                }
+              } catch {
+                chunkAccumulator += dataStr;
+                const cleanChunk = chunkAccumulator.replace(/<think>[\s\S]*?<\/think>/gi, '').trimStart();
                 setPageResults(prev => ({
                   ...prev,
-                  [pageKey]: cleanDisplay || formattedAccumulator
+                  [pageKey]: (pageFullAccumulator ? pageFullAccumulator + "\n\n---\n\n" : "") + cleanChunk
                 }));
               }
-            } catch {
-              formattedAccumulator += dataStr;
-              const cleanDisplay = formattedAccumulator.replace(/<think>[\s\S]*?<\/think>/gi, '').trimStart();
-              setPageResults(prev => ({
-                ...prev,
-                [pageKey]: cleanDisplay || formattedAccumulator
-              }));
             }
           }
+        }
+
+        const finalCleanChunk = chunkAccumulator.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+        if (finalCleanChunk) {
+          pageFullAccumulator = (pageFullAccumulator ? pageFullAccumulator + "\n\n---\n\n" : "") + finalCleanChunk;
+          setPageResults(prev => ({
+            ...prev,
+            [pageKey]: pageFullAccumulator
+          }));
         }
       }
     } catch (err) {

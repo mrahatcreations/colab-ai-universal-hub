@@ -444,6 +444,83 @@ async def ocr_endpoint(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"OCR failed: {str(e)}")
 
+@app.post("/api/pdf/info")
+async def get_pdf_info(file: UploadFile = File(...)):
+    """Returns total pages and metadata of a PDF file quickly."""
+    try:
+        import pypdfium2 as pdfium
+        content = await file.read()
+        pdf = pdfium.PdfDocument(content)
+        return {
+            "status": "success",
+            "filename": file.filename,
+            "total_pages": len(pdf)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PDF reading error: {str(e)}")
+
+@app.post("/api/ocr/page")
+async def ocr_single_page_endpoint(
+    file: UploadFile = File(...),
+    page_num: int = Form(1),
+    languages: str = Form("en,bn")
+):
+    """Scans a specific single page of a PDF or image in real time."""
+    global ocr_reader
+    if not OCR_AVAILABLE:
+        raise HTTPException(status_code=503, detail="EasyOCR is not installed.")
+
+    try:
+        lang_list = [l.strip() for l in languages.split(",") if l.strip()]
+        if not lang_list:
+            lang_list = DEFAULT_OCR_LANGS
+
+        if ocr_reader is None:
+            ocr_reader = easyocr.Reader(lang_list, gpu=torch.cuda.is_available())
+
+        file_bytes = await file.read()
+        is_pdf = file.filename.lower().endswith(".pdf") or "pdf" in (file.content_type or "").lower()
+
+        if is_pdf:
+            import pypdfium2 as pdfium
+            import numpy as np
+            pdf = pdfium.PdfDocument(file_bytes)
+            total_pages = len(pdf)
+
+            target_idx = max(0, min(page_num - 1, total_pages - 1))
+            page = pdf[target_idx]
+            pil_image = page.render(scale=2.0).to_pil()
+            np_image = np.array(pil_image)
+
+            results = ocr_reader.readtext(np_image)
+            lines = [r[1] for r in results]
+            text = "\n".join(lines)
+
+            return {
+                "status": "success",
+                "is_pdf": True,
+                "filename": file.filename,
+                "page_num": target_idx + 1,
+                "total_pages": total_pages,
+                "text": text,
+                "lines_count": len(lines)
+            }
+        else:
+            results = ocr_reader.readtext(file_bytes)
+            lines = [r[1] for r in results]
+            text = "\n".join(lines)
+            return {
+                "status": "success",
+                "is_pdf": False,
+                "filename": file.filename,
+                "page_num": 1,
+                "total_pages": 1,
+                "text": text,
+                "lines_count": len(lines)
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Page OCR failed: {str(e)}")
+
 if __name__ == "__main__":
     import uvicorn
     from config import SERVER_HOST, SERVER_PORT

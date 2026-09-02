@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   FileText, Upload, ChevronLeft, ChevronRight, Copy, Check, 
-  Send, Download, Trash2, RefreshCw, Sparkles, Layers, Eye, 
-  FileCheck, AlertCircle, Loader2 
+  Send, Download, Trash2, Sparkles, Layers, Eye, 
+  FileCheck, AlertCircle, Loader2, Play, Square, FastForward 
 } from 'lucide-react';
 import { getApiBase } from '../config';
 
@@ -12,12 +12,11 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
   const [isPdf, setIsPdf] = useState(false);
   const [totalPages, setTotalPages] = useState(1);
   const [currentPage, setCurrentPage] = useState(1);
-  const [scanningPage, setScanningPage] = useState(null); // which page is currently being scanned
   const [isScanning, setIsScanning] = useState(false);
+  const [scanMode, setScanMode] = useState("single"); // "single" or "batch"
   
-  // OCR Results
-  const [pagesData, setPagesData] = useState([]); // [{ page_num: 1, text: "..." }]
-  const [fullText, setFullText] = useState("");
+  // OCR Results cache per page: { 1: "text of page 1", 2: "text of page 2" }
+  const [pageResults, setPageResults] = useState({});
   const [viewMode, setViewMode] = useState("current"); // "current" or "all"
   
   const [languages, setLanguages] = useState("en,bn");
@@ -25,6 +24,7 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
   const [error, setError] = useState(null);
 
   const fileInputRef = useRef(null);
+  const abortControllerRef = useRef(null);
 
   // Cleanup object URL
   useEffect(() => {
@@ -33,7 +33,7 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
     };
   }, [fileUrl]);
 
-  const handleFileSelect = (selectedFile) => {
+  const handleFileSelect = async (selectedFile) => {
     if (!selectedFile) return;
     const isDocPdf = selectedFile.type === 'application/pdf' || selectedFile.name.toLowerCase().endsWith('.pdf');
     
@@ -42,10 +42,27 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
     setFileUrl(URL.createObjectURL(selectedFile));
     setCurrentPage(1);
     setTotalPages(1);
-    setPagesData([]);
-    setFullText("");
+    setPageResults({});
     setError(null);
-    setScanningPage(null);
+
+    // If PDF, immediately fetch page count from server
+    if (isDocPdf) {
+      try {
+        const apiBase = getApiBase();
+        const formData = new FormData();
+        formData.append("file", selectedFile);
+        const res = await fetch(`${apiBase}/api/pdf/info`, {
+          method: "POST",
+          body: formData
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setTotalPages(data.total_pages || 1);
+        }
+      } catch (err) {
+        console.log("Could not fetch PDF info:", err);
+      }
+    }
   };
 
   const handleDrop = (e) => {
@@ -54,58 +71,108 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
     if (dropped) handleFileSelect(dropped);
   };
 
-  // Start Full Scanning
-  const handleStartOcr = async () => {
+  // Scan single page (Current Page)
+  const handleScanCurrentPage = async () => {
     if (!file || isScanning) return;
     setIsScanning(true);
     setError(null);
-    setScanningPage(1);
+    setScanMode("single");
 
     const formData = new FormData();
     formData.append("file", file);
+    formData.append("page_num", currentPage.toString());
     formData.append("languages", languages);
 
     try {
       const apiBase = getApiBase();
-      
-      // Artificial step animation for scanning pages if multi-page PDF
-      const scanInterval = setInterval(() => {
-        setScanningPage(prev => (prev < totalPages ? prev + 1 : prev));
-      }, 1200);
-
-      const res = await fetch(`${apiBase}/api/ocr`, {
+      const res = await fetch(`${apiBase}/api/ocr/page`, {
         method: "POST",
-        body: formData,
+        body: formData
       });
-
-      clearInterval(scanInterval);
 
       if (!res.ok) {
         const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.detail || "OCR Extraction Failed.");
+        throw new Error(errJson.detail || "Page OCR failed.");
       }
 
       const data = await res.json();
-      setTotalPages(data.total_pages || 1);
-      setPagesData(data.pages || []);
-      setFullText(data.text || "");
-      setScanningPage(null);
+      setPageResults(prev => ({
+        ...prev,
+        [currentPage]: data.text || "কোনো টেক্সট পাওয়া যায়নি।"
+      }));
+      if (data.total_pages) {
+        setTotalPages(data.total_pages);
+      }
     } catch (err) {
       setError(err.message);
     } finally {
       setIsScanning(false);
-      setScanningPage(null);
     }
   };
 
-  const getCurrentPageText = () => {
-    if (viewMode === "all") return fullText;
-    const pageObj = pagesData.find(p => p.page_num === currentPage);
-    return pageObj ? pageObj.text : (fullText && totalPages === 1 ? fullText : "");
+  // Scan all pages sequentially with live progress
+  const handleScanAllPages = async () => {
+    if (!file || isScanning) return;
+    setIsScanning(true);
+    setError(null);
+    setScanMode("batch");
+
+    abortControllerRef.current = new AbortController();
+
+    const apiBase = getApiBase();
+    for (let p = 1; p <= totalPages; p++) {
+      if (abortControllerRef.current?.signal?.aborted) break;
+
+      setCurrentPage(p);
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("page_num", p.toString());
+      formData.append("languages", languages);
+
+      try {
+        const res = await fetch(`${apiBase}/api/ocr/page`, {
+          method: "POST",
+          body: formData,
+          signal: abortControllerRef.current.signal
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          setPageResults(prev => ({
+            ...prev,
+            [p]: data.text || ""
+          }));
+        }
+      } catch (err) {
+        if (err.name === 'AbortError') break;
+        console.error(`Error scanning page ${p}:`, err);
+      }
+    }
+
+    setIsScanning(false);
+    abortControllerRef.current = null;
+  };
+
+  const handleStopScan = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    setIsScanning(false);
+  };
+
+  const getCombinedText = () => {
+    const pages = Object.keys(pageResults).sort((a, b) => Number(a) - Number(b));
+    if (pages.length === 0) return "";
+    return pages.map(p => `--- পৃষ্ঠা ${p} ---\n${pageResults[p]}`).join("\n\n");
+  };
+
+  const getActiveText = () => {
+    if (viewMode === "all") return getCombinedText();
+    return pageResults[currentPage] || "";
   };
 
   const handleCopy = () => {
-    const text = getCurrentPageText();
+    const text = getActiveText();
     if (!text) return;
     navigator.clipboard.writeText(text);
     setCopied(true);
@@ -113,20 +180,20 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
   };
 
   const handleSendToChat = () => {
-    const text = getCurrentPageText();
+    const text = getActiveText();
     if (!text) return;
     onInsertIntoChat(text);
     onBackToChat();
   };
 
   const handleDownloadTxt = () => {
-    const text = getCurrentPageText();
+    const text = getActiveText();
     if (!text) return;
     const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${file?.name?.replace(/\.[^/.]+$/, "") || "ocr_document"}_page_${currentPage}.txt`;
+    link.download = `${file?.name?.replace(/\.[^/.]+$/, "") || "ocr_document"}_${viewMode === "all" ? "full" : `page_${currentPage}`}.txt`;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -134,16 +201,16 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
   const handleClear = () => {
     setFile(null);
     setFileUrl(null);
-    setPagesData([]);
-    setFullText("");
+    setPageResults({});
     setError(null);
-    setScanningPage(null);
+    setCurrentPage(1);
+    setTotalPages(1);
   };
 
   return (
-    <div className="flex-1 flex flex-col h-screen bg-[#212121] text-[#ececec] overflow-hidden">
-      {/* Top Header */}
-      <header className="h-14 border-b border-[#2d2d2d] flex items-center justify-between px-6 bg-[#1a1a1a] shrink-0 z-10">
+    <div className="flex-1 flex flex-col h-screen bg-[#1c1c1c] text-[#ececec] overflow-hidden">
+      {/* Top Editorial Header */}
+      <header className="h-14 border-b border-[#2d2d2d] flex items-center justify-between px-6 bg-[#171717] shrink-0 z-10">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-emerald-600/20 text-emerald-400 flex items-center justify-center font-bold">
             <FileText className="w-4 h-4" />
@@ -153,11 +220,11 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
               <span>PDF & Document OCR Studio</span>
               {isPdf && (
                 <span className="text-[10px] bg-red-500/20 text-red-400 border border-red-500/30 px-1.5 py-0.2 rounded font-mono">
-                  PDF
+                  PDF ({totalPages} {totalPages === 1 ? 'Page' : 'Pages'})
                 </span>
               )}
             </h1>
-            <p className="text-[11px] text-neutral-400">
+            <p className="text-[11px] text-neutral-400 truncate max-w-sm">
               {file ? `${file.name} (${(file.size / (1024 * 1024)).toFixed(2)} MB)` : "ডকুমেন্ট আপলোড করে বাংলা ও ইংরেজি টেক্সট এক্সট্রাক্ট করুন"}
             </p>
           </div>
@@ -168,12 +235,12 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
           {file && (
             <>
               {/* Language Selector */}
-              <div className="flex items-center gap-1.5 bg-[#262626] border border-[#333] rounded-lg p-1 text-xs">
-                <span className="text-[11px] text-neutral-400 pl-1.5">ভাষা:</span>
+              <div className="flex items-center gap-1 bg-[#242424] border border-[#333] rounded-lg px-2 py-1 text-xs">
+                <span className="text-[11px] text-neutral-400">ভাষা:</span>
                 <select 
                   value={languages} 
                   onChange={e => setLanguages(e.target.value)}
-                  className="bg-transparent text-xs text-neutral-200 focus:outline-none cursor-pointer pr-1"
+                  className="bg-transparent text-xs text-neutral-200 focus:outline-none cursor-pointer"
                 >
                   <option value="en,bn" className="bg-[#222]">বাংলা + English</option>
                   <option value="bn" className="bg-[#222]">শুধুমাত্র বাংলা</option>
@@ -181,19 +248,41 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
                 </select>
               </div>
 
-              {/* Scan Button */}
-              <button
-                onClick={handleStartOcr}
-                disabled={isScanning}
-                className="px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium flex items-center gap-2 transition-all shadow-md disabled:opacity-50"
-              >
-                {isScanning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-                <span>{isScanning ? "স্ক্যান চলছে..." : "স্ক্যান শুরু করুন"}</span>
-              </button>
+              {/* Scan Current Page Button */}
+              {isScanning ? (
+                <button
+                  onClick={handleStopScan}
+                  className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-medium flex items-center gap-1.5 transition-all shadow-md"
+                >
+                  <Square className="w-3.5 h-3.5 fill-current" />
+                  <span>স্ক্যান বন্ধ করুন</span>
+                </button>
+              ) : (
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={handleScanCurrentPage}
+                    className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium flex items-center gap-1.5 transition-all shadow-md"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>বর্তমান পেজ স্ক্যান ({currentPage})</span>
+                  </button>
+
+                  {totalPages > 1 && (
+                    <button
+                      onClick={handleScanAllPages}
+                      title="সবগুলো পেজ ক্রমান্বয়ে স্ক্যান করুন"
+                      className="px-3 py-1.5 rounded-xl bg-[#282828] hover:bg-[#333] text-neutral-200 text-xs font-medium flex items-center gap-1.5 border border-[#383838] transition-all"
+                    >
+                      <FastForward className="w-3.5 h-3.5 text-emerald-400" />
+                      <span className="hidden sm:inline">সব পেজ স্ক্যান</span>
+                    </button>
+                  )}
+                </div>
+              )}
 
               <button
                 onClick={handleClear}
-                title="ডকুমেন্ট পরিবর্তন করুন"
+                title="নতুন ডকুমেন্ট নির্বাচন করুন"
                 className="p-1.5 rounded-lg text-neutral-400 hover:text-rose-400 hover:bg-[#282828] transition-colors"
               >
                 <Trash2 className="w-4 h-4" />
@@ -203,7 +292,7 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
 
           <button
             onClick={onBackToChat}
-            className="px-3 py-1.5 rounded-lg bg-[#282828] hover:bg-[#333] text-neutral-300 text-xs font-medium transition-colors ml-2"
+            className="px-3 py-1.5 rounded-lg bg-[#282828] hover:bg-[#333] text-neutral-300 text-xs font-medium transition-colors ml-1"
           >
             চ্যাটে ফিরুন
           </button>
@@ -212,7 +301,7 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
 
       {/* Main Split Body */}
       {!file ? (
-        /* Empty Upload State */
+        /* Empty Upload Zone */
         <div className="flex-1 flex flex-col items-center justify-center p-6">
           <div 
             onDragOver={e => e.preventDefault()}
@@ -240,7 +329,7 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
             </div>
 
             <div className="flex items-center gap-2 text-[11px] text-neutral-500 font-mono pt-2">
-              <span className="bg-[#242424] px-2 py-0.5 rounded border border-[#333]">PDF (বহুপাতা)</span>
+              <span className="bg-[#242424] px-2 py-0.5 rounded border border-[#333]">PDF (যেকোনো সাইজ)</span>
               <span className="bg-[#242424] px-2 py-0.5 rounded border border-[#333]">PNG</span>
               <span className="bg-[#242424] px-2 py-0.5 rounded border border-[#333]">JPG</span>
               <span className="bg-[#242424] px-2 py-0.5 rounded border border-[#333]">WEBP</span>
@@ -252,36 +341,54 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
         <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
           
           {/* ========================================================
-              LEFT COLUMN: PDF & Document Preview with Laser Scan
+              LEFT COLUMN: PDF & Document Preview with Active Laser Beam
               ======================================================== */}
-          <div className="w-full md:w-1/2 flex flex-col border-r border-[#2d2d2d] bg-[#141414] overflow-hidden">
-            {/* Document Toolbar */}
-            <div className="h-10 border-b border-[#282828] bg-[#1a1a1a] px-4 flex items-center justify-between text-xs text-neutral-400 shrink-0">
+          <div className="w-full md:w-1/2 flex flex-col border-r border-[#2d2d2d] bg-[#121212] overflow-hidden">
+            {/* Page Navigation Bar */}
+            <div className="h-11 border-b border-[#282828] bg-[#181818] px-4 flex items-center justify-between text-xs text-neutral-300 shrink-0">
               <div className="flex items-center gap-2">
-                <span className="font-medium text-neutral-300">ডকুমেন্ট ভিউয়ার</span>
+                <span className="font-semibold text-neutral-200">ডকুমেন্ট ভিউয়ার</span>
                 {totalPages > 1 && (
-                  <span className="text-[11px] bg-[#282828] px-2 py-0.5 rounded font-mono text-neutral-300">
-                    পৃষ্ঠা {currentPage} / {totalPages}
+                  <span className="text-[11px] bg-[#222] border border-[#333] px-2 py-0.5 rounded-full font-mono text-emerald-400">
+                    পেজ {currentPage} / {totalPages}
                   </span>
                 )}
               </div>
 
-              {/* Page Navigation Controls */}
+              {/* Interactive Page Jumper */}
               {totalPages > 1 && (
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-1.5">
                   <button
-                    disabled={currentPage <= 1}
+                    disabled={currentPage <= 1 || isScanning}
                     onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                    className="p-1 rounded hover:bg-[#282828] disabled:opacity-30 text-neutral-300"
-                    title="পূর্ববর্তী পৃষ্ঠা"
+                    className="p-1 rounded hover:bg-[#282828] disabled:opacity-30 text-neutral-300 transition-colors"
+                    title="আগের পৃষ্ঠা"
                   >
                     <ChevronLeft className="w-4 h-4" />
                   </button>
+
+                  <div className="flex items-center gap-1 font-mono text-xs text-neutral-400">
+                    <input
+                      type="number"
+                      min={1}
+                      max={totalPages}
+                      value={currentPage}
+                      onChange={e => {
+                        const val = parseInt(e.target.value);
+                        if (!isNaN(val) && val >= 1 && val <= totalPages) {
+                          setCurrentPage(val);
+                        }
+                      }}
+                      className="w-12 bg-[#222] border border-[#383838] rounded px-1.5 py-0.5 text-center text-white text-xs focus:outline-none focus:border-emerald-500"
+                    />
+                    <span>/ {totalPages}</span>
+                  </div>
+
                   <button
-                    disabled={currentPage >= totalPages}
+                    disabled={currentPage >= totalPages || isScanning}
                     onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-                    className="p-1 rounded hover:bg-[#282828] disabled:opacity-30 text-neutral-300"
-                    title="পরবর্তী পৃষ্ঠা"
+                    className="p-1 rounded hover:bg-[#282828] disabled:opacity-30 text-neutral-300 transition-colors"
+                    title="পরের পৃষ্ঠা"
                   >
                     <ChevronRight className="w-4 h-4" />
                   </button>
@@ -289,75 +396,80 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
               )}
             </div>
 
-            {/* Document Preview Canvas / Viewport */}
-            <div className="flex-1 relative overflow-auto p-4 flex items-center justify-center bg-[#0d0d0d]">
-              {/* Active Scanner Laser Line Animation */}
-              {isScanning && (
-                <>
-                  <div className="scanner-laser" />
-                  <div className="scanner-overlay" />
-                  <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-emerald-950/90 border border-emerald-500/50 text-emerald-300 px-3 py-1.5 rounded-full text-xs font-mono flex items-center gap-2 shadow-2xl backdrop-blur-md">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                    <span>স্ক্যানিং পেজ: {scanningPage || currentPage} / {totalPages}...</span>
-                  </div>
-                </>
-              )}
+            {/* Document Frame with Laser Beam */}
+            <div className="flex-1 relative overflow-hidden p-3 bg-[#0d0d0d] flex items-center justify-center">
+              {/* Document Container */}
+              <div className="w-full h-full relative rounded-xl overflow-hidden border border-[#2a2a2a] bg-[#1e1e1e] shadow-2xl flex items-center justify-center">
+                {/* Laser Animation when scanning */}
+                {isScanning && (
+                  <>
+                    <div className="scanner-laser" />
+                    <div className="scanner-overlay" />
+                    <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-emerald-950/95 border border-emerald-500/60 text-emerald-300 px-4 py-1.5 rounded-full text-xs font-mono flex items-center gap-2 shadow-2xl backdrop-blur-md">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                      <span>পেজ {currentPage} স্ক্যানিং চলছে...</span>
+                    </div>
+                  </>
+                )}
 
-              {/* PDF or Image Viewer */}
-              {isPdf ? (
-                <iframe
-                  src={`${fileUrl}#page=${currentPage}&toolbar=0&navpanes=0`}
-                  title="PDF Preview"
-                  className="w-full h-full rounded-xl border border-[#2d2d2d] bg-white shadow-2xl"
-                />
-              ) : (
-                <img 
-                  src={fileUrl} 
-                  alt="Document preview" 
-                  className="max-h-full max-w-full object-contain rounded-xl border border-[#2d2d2d] shadow-2xl"
-                />
-              )}
+                {/* PDF or Image Viewer */}
+                {isPdf ? (
+                  <iframe
+                    key={`page-${currentPage}`}
+                    src={`${fileUrl}#page=${currentPage}&toolbar=0&navpanes=0&view=FitH`}
+                    title="PDF Preview"
+                    className="w-full h-full border-0 bg-white"
+                  />
+                ) : (
+                  <img 
+                    src={fileUrl} 
+                    alt="Document preview" 
+                    className="max-h-full max-w-full object-contain"
+                  />
+                )}
+              </div>
             </div>
           </div>
 
           {/* ========================================================
-              RIGHT COLUMN: OCR Live Text Results
+              RIGHT COLUMN: Extracted OCR Text Editor
               ======================================================== */}
-          <div className="w-full md:w-1/2 flex flex-col bg-[#1c1c1c] overflow-hidden">
-            {/* Results Toolbar */}
-            <div className="h-10 border-b border-[#282828] bg-[#1a1a1a] px-4 flex items-center justify-between text-xs shrink-0">
+          <div className="w-full md:w-1/2 flex flex-col bg-[#181818] overflow-hidden">
+            {/* Results Header Toolbar */}
+            <div className="h-11 border-b border-[#282828] bg-[#1a1a1a] px-4 flex items-center justify-between text-xs shrink-0">
               <div className="flex items-center gap-2">
-                <span className="font-semibold text-neutral-200">এক্সট্রাক্টেড টেক্সট</span>
-                {pagesData.length > 0 && (
-                  <div className="flex bg-[#262626] rounded-lg p-0.5 border border-[#333]">
+                <span className="font-semibold text-neutral-200">শনাক্তকৃত টেক্সট</span>
+
+                {Object.keys(pageResults).length > 0 && (
+                  <div className="flex bg-[#242424] rounded-lg p-0.5 border border-[#333]">
                     <button
                       onClick={() => setViewMode("current")}
                       className={`px-2.5 py-0.5 rounded text-[11px] font-medium transition-all ${
-                        viewMode === "current" ? "bg-emerald-600 text-white" : "text-neutral-400 hover:text-white"
+                        viewMode === "current" ? "bg-emerald-600 text-white shadow-sm" : "text-neutral-400 hover:text-white"
                       }`}
                     >
-                      বর্তমান পেজ ({currentPage})
+                      পেজ {currentPage}
                     </button>
                     {totalPages > 1 && (
                       <button
                         onClick={() => setViewMode("all")}
                         className={`px-2.5 py-0.5 rounded text-[11px] font-medium transition-all ${
-                          viewMode === "all" ? "bg-emerald-600 text-white" : "text-neutral-400 hover:text-white"
+                          viewMode === "all" ? "bg-emerald-600 text-white shadow-sm" : "text-neutral-400 hover:text-white"
                         }`}
                       >
-                        সম্পূর্ণ ডকুমেন্ট
+                        সব পেজ ({Object.keys(pageResults).length})
                       </button>
                     )}
                   </div>
                 )}
               </div>
 
-              {/* Action Icons */}
+              {/* Actions */}
               <div className="flex items-center gap-1.5">
                 <button
                   onClick={handleCopy}
-                  disabled={!getCurrentPageText()}
-                  className="p-1.5 rounded-lg hover:bg-[#282828] text-neutral-300 disabled:opacity-30 flex items-center gap-1 text-xs"
+                  disabled={!getActiveText()}
+                  className="p-1.5 rounded-lg hover:bg-[#282828] text-neutral-300 disabled:opacity-30 flex items-center gap-1 text-xs transition-colors"
                   title="টেক্সট কপি করুন"
                 >
                   {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
@@ -366,9 +478,9 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
 
                 <button
                   onClick={handleDownloadTxt}
-                  disabled={!getCurrentPageText()}
-                  className="p-1.5 rounded-lg hover:bg-[#282828] text-neutral-300 disabled:opacity-30 flex items-center gap-1 text-xs"
-                  title="TXT হিসেবে ডাউনলোড করুন"
+                  disabled={!getActiveText()}
+                  className="p-1.5 rounded-lg hover:bg-[#282828] text-neutral-300 disabled:opacity-30 flex items-center gap-1 text-xs transition-colors"
+                  title="TXT ডাউনলোড"
                 >
                   <Download className="w-3.5 h-3.5" />
                   <span className="hidden sm:inline">ডাউনলোড</span>
@@ -376,9 +488,9 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
 
                 <button
                   onClick={handleSendToChat}
-                  disabled={!getCurrentPageText()}
-                  className="px-2.5 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 disabled:opacity-30 flex items-center gap-1.5 text-xs font-medium ml-1"
-                  title="এই টেক্সট নিয়ে চ্যাটে আলোচনা করুন"
+                  disabled={!getActiveText()}
+                  className="px-2.5 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 disabled:opacity-30 flex items-center gap-1.5 text-xs font-medium ml-1 transition-all"
+                  title="এই টেক্সট নিয়ে চ্যাটে কথা বলুন"
                 >
                   <Send className="w-3 h-3" />
                   <span>চ্যাটে পাঠান</span>
@@ -386,46 +498,50 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
               </div>
             </div>
 
-            {/* Text Editor Area */}
+            {/* Main Text Content */}
             <div className="flex-1 p-4 overflow-y-auto flex flex-col">
               {error ? (
                 <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0" />
                   <span>{error}</span>
                 </div>
-              ) : isScanning ? (
+              ) : isScanning && !getActiveText() ? (
                 <div className="flex-1 flex flex-col items-center justify-center text-center p-8 space-y-3">
                   <div className="w-12 h-12 rounded-2xl bg-emerald-600/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
                     <Loader2 className="w-6 h-6 animate-spin" />
                   </div>
                   <div className="text-sm font-medium text-white">
-                    ডকুমেন্ট স্ক্যান করা হচ্ছে...
+                    পেজ {currentPage} স্ক্যান করা হচ্ছে...
                   </div>
                   <div className="text-xs text-neutral-400 max-w-xs">
-                    ইমেজ থেকে বাংলা ও ইংরেজি যুক্তবর্ণ এবং প্যারাগ্রাফ আলাদা করা হচ্ছে।
+                    T4 GPU দিয়ে বাংলা ও ইংরেজি অক্ষর ও যুক্তবর্ণ নিখুঁতভাবে এক্সট্রাক্ট করা হচ্ছে।
                   </div>
                 </div>
-              ) : !getCurrentPageText() ? (
-                <div className="flex-1 flex flex-col items-center justify-center text-center p-8 text-neutral-500 space-y-2">
-                  <FileCheck className="w-10 h-10 opacity-30" />
-                  <div className="text-xs font-medium">এখনো কোনো টেক্সট এক্সট্রাক্ট করা হয়নি।</div>
-                  <div className="text-[11px]">উপরে থাকা <span className="text-emerald-400 font-medium">'স্ক্যান শুরু করুন'</span> বাটনে চাপ দিন।</div>
+              ) : !getActiveText() ? (
+                <div className="flex-1 flex flex-col items-center justify-center text-center p-8 text-neutral-500 space-y-3">
+                  <div className="w-12 h-12 rounded-2xl bg-[#222] border border-[#333] flex items-center justify-center text-neutral-400">
+                    <Sparkles className="w-6 h-6" />
+                  </div>
+                  <div className="text-xs font-medium text-neutral-300">পেজ {currentPage}-এর কোনো টেক্সট এখনো স্ক্যান করা হয়নি।</div>
+                  <div className="text-[11px] text-neutral-500">
+                    উপরে থাকা <span className="text-emerald-400 font-medium">'বর্তমান পেজ স্ক্যান ({currentPage})'</span> বাটনে ক্লিক করুন।
+                  </div>
                 </div>
               ) : (
                 <textarea
-                  value={getCurrentPageText()}
+                  value={getActiveText()}
                   readOnly
                   placeholder="শনাক্তকৃত টেক্সট এখানে প্রদর্শিত হবে..."
-                  className="flex-1 w-full bg-[#141414] border border-[#2d2d2d] rounded-xl p-4 text-xs md:text-sm text-neutral-200 font-mono leading-relaxed resize-none focus:outline-none focus:border-emerald-500"
+                  className="flex-1 w-full bg-[#131313] border border-[#2b2b2b] rounded-xl p-4 text-xs md:text-sm text-neutral-100 font-sans leading-relaxed resize-none focus:outline-none focus:border-emerald-500"
                 />
               )}
             </div>
 
-            {/* Bottom Status Bar */}
-            {pagesData.length > 0 && (
-              <div className="h-8 border-t border-[#282828] bg-[#171717] px-4 flex items-center justify-between text-[11px] text-neutral-400 font-mono shrink-0">
-                <span>মোট লাইন: {getCurrentPageText().split('\n').filter(Boolean).length}</span>
-                <span>অক্ষর সংখ্যা: {getCurrentPageText().length}</span>
+            {/* Bottom Telemetry Bar */}
+            {getActiveText() && (
+              <div className="h-8 border-t border-[#262626] bg-[#141414] px-4 flex items-center justify-between text-[11px] text-neutral-400 font-mono shrink-0">
+                <span>লাইন সংখ্যা: {getActiveText().split('\n').filter(Boolean).length}</span>
+                <span>অক্ষর সংখ্যা: {getActiveText().length}</span>
               </div>
             )}
           </div>

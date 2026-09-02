@@ -114,6 +114,39 @@ function extractCleanOutput(rawText) {
   return rawText;
 }
 
+// Splits a page image blob into two distinct vertical column blobs (Left Half & Right Half)
+async function splitPageIntoColumns(imageBlob) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const halfWidth = Math.floor(img.width / 2);
+      const height = img.height;
+
+      // Left Column Canvas
+      const leftCanvas = document.createElement("canvas");
+      leftCanvas.width = halfWidth;
+      leftCanvas.height = height;
+      const leftCtx = leftCanvas.getContext("2d");
+      leftCtx.drawImage(img, 0, 0, halfWidth, height, 0, 0, halfWidth, height);
+
+      // Right Column Canvas
+      const rightCanvas = document.createElement("canvas");
+      rightCanvas.width = halfWidth;
+      rightCanvas.height = height;
+      const rightCtx = rightCanvas.getContext("2d");
+      rightCtx.drawImage(img, halfWidth, 0, halfWidth, height, 0, 0, halfWidth, height);
+
+      leftCanvas.toBlob((leftBlob) => {
+        rightCanvas.toBlob((rightBlob) => {
+          resolve({ leftBlob, rightBlob });
+        }, "image/png");
+      }, "image/png");
+    };
+    img.onerror = reject;
+    img.src = URL.createObjectURL(imageBlob);
+  });
+}
+
 export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
   const [file, setFile] = useState(null);
   const [isPdf, setIsPdf] = useState(false);
@@ -137,7 +170,8 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
   const [viewMode, setViewMode] = useState("current"); // "current" or "all"
   const [formatTab, setFormatTab] = useState("formatted"); // 'formatted' or 'raw'
   const [isAiFormatting, setIsAiFormatting] = useState(false);
-  const [autoAiProofread, setAutoAiProofread] = useState(true); // Automatically runs AI to understand sentences and correct spellings
+  const [autoAiProofread, setAutoAiProofread] = useState(true);
+  const [twoColumnMode, setTwoColumnMode] = useState(true); // Physical 2-column image separation
   
   const [languages, setLanguages] = useState("en,bn");
   const [copied, setCopied] = useState(false);
@@ -289,42 +323,61 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
         continue;
       }
 
-      // 2. Send ONLY the single 200KB page image to Colab T4 GPU!
-      const formData = new FormData();
-      formData.append("file", pageData.blob, `page_${p}.png`);
-      formData.append("languages", languages);
-
       try {
-        const res = await fetch(`${apiBase}/api/ocr`, {
-          method: "POST",
-          body: formData,
-          signal: abortControllerRef.current.signal
-        });
+        let finalPageText = "";
 
-        if (res.ok) {
-          const data = await res.json();
-          const structuredText = formatBookPageContent(data.text || "");
-          const rawLines = structuredText.split("\n");
-          
-          if (rawLines.length === 0) {
-            setPageResults(prev => ({ ...prev, [p]: "কোনো টেক্সট পাওয়া যায়নি।" }));
-          } else {
-            let streamAccumulator = "";
-            for (let lineIdx = 0; lineIdx < rawLines.length; lineIdx++) {
-              if (abortControllerRef.current?.signal?.aborted) break;
-              streamAccumulator += (streamAccumulator ? "\n" : "") + rawLines[lineIdx];
-              
-              setPageResults(prev => ({
-                ...prev,
-                [p]: streamAccumulator
-              }));
+        if (twoColumnMode) {
+          // Physical 2-column image splitting: Left Half & Right Half
+          const { leftBlob, rightBlob } = await splitPageIntoColumns(pageData.blob);
 
-              // 20ms smooth typewriter streaming pace
-              await new Promise(r => setTimeout(r, 20));
-            }
+          // 1. Scan Column 1 (Left Half)
+          const form1 = new FormData();
+          form1.append("file", leftBlob, `page_${p}_col1.png`);
+          form1.append("languages", languages);
+          const res1 = await fetch(`${apiBase}/api/ocr`, {
+            method: "POST",
+            body: form1,
+            signal: abortControllerRef.current.signal
+          });
+          const data1 = res1.ok ? await res1.json() : { text: "" };
+          const col1Text = formatBookPageContent(data1.text || "");
+
+          // 2. Scan Column 2 (Right Half)
+          const form2 = new FormData();
+          form2.append("file", rightBlob, `page_${p}_col2.png`);
+          form2.append("languages", languages);
+          const res2 = await fetch(`${apiBase}/api/ocr`, {
+            method: "POST",
+            body: form2,
+            signal: abortControllerRef.current.signal
+          });
+          const data2 = res2.ok ? await res2.json() : { text: "" };
+          const col2Text = formatBookPageContent(data2.text || "");
+
+          finalPageText = `## 📌 [কলাম ১]\n\n${col1Text}\n\n---\n\n## 📌 [কলাম ২]\n\n${col2Text}`;
+        } else {
+          // Standard full-page scan
+          const formData = new FormData();
+          formData.append("file", pageData.blob, `page_${p}.png`);
+          formData.append("languages", languages);
+
+          const res = await fetch(`${apiBase}/api/ocr`, {
+            method: "POST",
+            body: formData,
+            signal: abortControllerRef.current.signal
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            finalPageText = formatBookPageContent(data.text || "");
           }
-          setScanProgress({ done: i + 1, total: targetPages.length });
         }
+
+        setPageResults(prev => ({
+          ...prev,
+          [p]: finalPageText || "কোনো টেক্সট পাওয়া যায়নি।"
+        }));
+        setScanProgress({ done: i + 1, total: targetPages.length });
       } catch (err) {
         if (err.name === 'AbortError') break;
         console.error(`Page ${p} OCR failed:`, err);
@@ -644,6 +697,20 @@ Core Instructions:
                   {targetPages.length} পেজ
                 </span>
               </div>
+
+              {/* 2-Column Split Mode Button */}
+              <button
+                disabled={isScanning}
+                onClick={() => setTwoColumnMode(prev => !prev)}
+                className={`px-2.5 py-1 rounded-lg border text-[11px] font-medium flex items-center gap-1.5 transition-all ${
+                  twoColumnMode
+                    ? "bg-amber-500/20 text-amber-300 border-amber-500/40 shadow-sm"
+                    : "bg-[#222] text-neutral-400 border-[#333]"
+                }`}
+                title="পৃষ্ঠার মাঝখান দিয়ে কেটে কলাম ১ এবং কলাম ২ আলাদা আলাদা স্ক্যান করবে যাতে লাইন কখনোই না গুলায়"
+              >
+                <span>📑 ২-কলাম বই: {twoColumnMode ? "অন" : "অফ"}</span>
+              </button>
             </div>
 
             {/* Action Trigger / Stop Button */}

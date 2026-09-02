@@ -378,6 +378,12 @@ export default function OcrWorkspace({ onInsertIntoChat, onBackToChat }) {
           ...prev,
           [p]: finalPageText || "কোনো টেক্সট পাওয়া যায়নি।"
         }));
+
+        // Trigger Automated AI Formatting & Spelling Revision Pass
+        if (autoAiProofread && (finalPageText || pageData?.blob)) {
+          await formatTextWithAi(finalPageText, p);
+        }
+
         setScanProgress({ done: i + 1, total: targetPages.length });
       } catch (err) {
         if (err.name === 'AbortError') break;
@@ -874,6 +880,21 @@ REVISION RULES:
                 title="পৃষ্ঠার মাঝখান দিয়ে কেটে কলাম ১ এবং কলাম ২ আলাদা আলাদা স্ক্যান করবে যাতে লাইন কখনোই না গুলায়"
               >
                 <span>📑 ২-কলাম বই: {twoColumnMode ? "অন" : "অফ"}</span>
+              </button>
+
+              {/* Auto AI Proofread & Revision Toggle Button */}
+              <button
+                disabled={isScanning}
+                onClick={() => setAutoAiProofread(prev => !prev)}
+                className={`px-2.5 py-1 rounded-lg border text-[11px] font-medium flex items-center gap-1.5 transition-all ${
+                  autoAiProofread
+                    ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40 shadow-sm"
+                    : "bg-[#222] text-neutral-400 border-[#333]"
+                }`}
+                title="স্ক্যান হওয়ার সাথে সাথেই এআই স্বয়ংক্রিয়ভাবে বানান পরীক্ষা ও রিভিশন সম্পন্ন করবে"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                <span>অটো রিভিশন: {autoAiProofread ? "অন" : "অফ"}</span>
               </button>
             </div>
 

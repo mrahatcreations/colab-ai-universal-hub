@@ -59,10 +59,22 @@ class ModelManager:
 
             if torch.cuda.is_available():
                 load_kwargs["torch_dtype"] = torch.float16
-                if quantization == "4bit":
-                    load_kwargs["load_in_4bit"] = True
-                elif quantization == "8bit":
-                    load_kwargs["load_in_8bit"] = True
+                try:
+                    from transformers import BitsAndBytesConfig
+                    if quantization == "4bit":
+                        load_kwargs["quantization_config"] = BitsAndBytesConfig(
+                            load_in_4bit=True,
+                            bnb_4bit_compute_dtype=torch.float16,
+                            bnb_4bit_quant_type="nf4",
+                            bnb_4bit_use_double_quant=True
+                        )
+                    elif quantization == "8bit":
+                        load_kwargs["quantization_config"] = BitsAndBytesConfig(load_in_8bit=True)
+                except Exception:
+                    if quantization == "4bit":
+                        load_kwargs["load_in_4bit"] = True
+                    elif quantization == "8bit":
+                        load_kwargs["load_in_8bit"] = True
 
             model = AutoModelForCausalLM.from_pretrained(model_source, **load_kwargs)
 

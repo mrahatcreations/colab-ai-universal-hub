@@ -298,23 +298,38 @@ def load_model_endpoint(req: LoadModelRequest):
             # OCR / VLM Foundation Model (e.g., baidu/Unlimited-OCR, DeepSeek-OCR)
             from transformers import AutoModel, AutoConfig
             tokenizer = AutoTokenizer.from_pretrained(model_source, trust_remote_code=True)
-            
-            # Baidu Unlimited-OCR requires bfloat16/safetensors and pad_token_id on config
-            ocr_config = AutoConfig.from_pretrained(model_source, trust_remote_code=True)
-            pad_id = getattr(tokenizer, "pad_token_id", None) or getattr(tokenizer, "eos_token_id", 0) or 0
-            if not hasattr(ocr_config, "pad_token_id") or ocr_config.pad_token_id is None:
-                ocr_config.pad_token_id = pad_id
 
-            ocr_load_kwargs = {
-                "config": ocr_config,
-                "trust_remote_code": True,
-                "use_safetensors": True,
-            }
-            if torch.cuda.is_available():
-                ocr_load_kwargs["torch_dtype"] = torch.bfloat16
-                ocr_load_kwargs["device_map"] = "auto"
+            try:
+                ocr_config = AutoConfig.from_pretrained(model_source, trust_remote_code=True)
+                # Patch missing attributes expected by modern transformers
+                pad_id = getattr(tokenizer, "pad_token_id", None) or getattr(tokenizer, "eos_token_id", 0) or 0
+                if not hasattr(ocr_config, "pad_token_id") or ocr_config.pad_token_id is None:
+                    ocr_config.pad_token_id = pad_id
+                if not hasattr(ocr_config, "attention_dropout"):
+                    ocr_config.attention_dropout = 0.0
 
-            model = AutoModel.from_pretrained(model_source, **ocr_load_kwargs)
+                ocr_load_kwargs = {
+                    "config": ocr_config,
+                    "trust_remote_code": True,
+                    "use_safetensors": True,
+                }
+                if torch.cuda.is_available():
+                    ocr_load_kwargs["torch_dtype"] = torch.bfloat16
+                    ocr_load_kwargs["device_map"] = "auto"
+
+                model = AutoModel.from_pretrained(model_source, **ocr_load_kwargs)
+            except Exception as direct_e:
+                print(f"[!] Config load fallback: {direct_e}, attempting direct AutoModel load...", flush=True)
+                # Fallback directly to official syntax: AutoModel.from_pretrained(..., use_safetensors=True, torch_dtype=torch.bfloat16)
+                fallback_kwargs = {
+                    "trust_remote_code": True,
+                    "use_safetensors": True,
+                }
+                if torch.cuda.is_available():
+                    fallback_kwargs["torch_dtype"] = torch.bfloat16
+                    fallback_kwargs["device_map"] = "auto"
+                model = AutoModel.from_pretrained(model_source, **fallback_kwargs)
+
             if hasattr(model, "eval"):
                 model = model.eval()
         else:

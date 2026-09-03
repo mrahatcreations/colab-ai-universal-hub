@@ -17,8 +17,21 @@ try:
     import transformers.utils as _tf_utils
     if not hasattr(_tf_utils, "is_torch_fx_available"):
         _tf_utils.is_torch_fx_available = lambda: False
-except Exception:
-    pass
+
+    # Monkey patch PretrainedConfig so missing config attributes on custom models (Baidu/DeepSeek) never crash
+    from transformers.configuration_utils import PretrainedConfig
+    _orig_getattr = getattr(PretrainedConfig, "__getattr__", None)
+    def _safe_config_getattr(self, key):
+        if key == "attention_dropout":
+            return 0.0
+        if key == "pad_token_id":
+            return 0
+        if _orig_getattr:
+            return _orig_getattr(self, key)
+        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{key}'")
+    PretrainedConfig.__getattr__ = _safe_config_getattr
+except Exception as _patch_e:
+    print(f"[!] Warning patching PretrainedConfig: {_patch_e}", flush=True)
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware

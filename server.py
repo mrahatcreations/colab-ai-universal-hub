@@ -147,11 +147,56 @@ def get_status():
     }
 
 # ---------------------------------------------------------------------------
+# Default recommended models for T4 GPU (can be customized or fetched dynamically)
+DEFAULT_FEATURED_MODELS = [
+    {
+        "id": "baidu/Unlimited-OCR",
+        "name": "Baidu Unlimited-OCR (Long-Horizon Document)",
+        "badge": "📄 ৪০+ পেজ ১-শট OCR",
+        "badgeColor": "bg-cyan-500/10 text-cyan-400 border-cyan-500/30",
+        "desc": "বই, প্রশ্নব্যাংক ও মাল্টি-পেজ ডকুমেন্ট এক ক্লিকে নির্ভুল টেক্সট ও কলামসহ পার্স করার জন্য আল্ট্রা-ফাস্ট মডেল।",
+        "vram": "~6.0 GB VRAM"
+    },
+    {
+        "id": "unsloth/Qwen2.5-VL-7B-Instruct-bnb-4bit",
+        "name": "Qwen 2.5 VL (7B Vision & Layout)",
+        "badge": "🌟 ২-কলাম বই ও ভিশন",
+        "badgeColor": "bg-emerald-500/10 text-emerald-400 border-emerald-500/30",
+        "desc": "বইয়ের ২-কলাম পেজ, চার্ট ও বাংলা যুক্তবর্ণ সরাসরি ছবি দেখে নির্ভুলভাবে পড়ার জন্য এক নম্বর ভিশন মডেল।",
+        "vram": "~5.5 GB VRAM"
+    },
+    {
+        "id": "unsloth/Qwen2.5-7B-Instruct-bnb-4bit",
+        "name": "Qwen 2.5 Instruct (7B Multilingual)",
+        "badge": "বাংলা ব্যাকরণ ও প্রশ্নব্যাংক",
+        "badgeColor": "bg-sky-500/10 text-sky-400 border-sky-500/30",
+        "desc": "বাংলা ভাষা ও পরীক্ষার ফরম্যাটের জন্য বিশ্বের #১ টেক্সট মডেল (সরাসরি দ্রুত আউটপুট)।",
+        "vram": "~4.8 GB VRAM"
+    },
+    {
+        "id": "unsloth/DeepSeek-R1-Distill-Qwen-7B-bnb-4bit",
+        "name": "DeepSeek R1 (7B Reasoning)",
+        "badge": "ডিপ রিজনিং",
+        "badgeColor": "bg-purple-500/10 text-purple-400 border-purple-500/30",
+        "desc": "জটিল প্রশ্নের গভীর যুক্তি ও বিশ্লেষণ করার জন্য শক্তিশালী রিজনিং ইঞ্জিন।",
+        "vram": "~5.2 GB VRAM"
+    },
+    {
+        "id": "unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit",
+        "name": "Llama 3.1 Instruct (8B Meta)",
+        "badge": "সুপারফাস্ট",
+        "badgeColor": "bg-amber-500/10 text-amber-400 border-amber-500/30",
+        "desc": "মেটার অত্যন্ত দ্রুতগতির এবং স্থিতিশীল সর্বজনীন ভাষা মডেল।",
+        "vram": "~5.4 GB VRAM"
+    }
+]
+
+# ---------------------------------------------------------------------------
 # Model Management Endpoints
 # ---------------------------------------------------------------------------
 @app.get("/api/models")
 def list_models():
-    """Lists locally downloaded models and active model."""
+    """Lists locally downloaded models, active model, and featured recommendations."""
     downloaded = []
     if MODELS_DIR.exists():
         for d in sorted(MODELS_DIR.iterdir()):
@@ -172,7 +217,8 @@ def list_models():
 
     return {
         "active_model": ACTIVE_MODEL_NAME,
-        "downloaded_models": downloaded
+        "downloaded_models": downloaded,
+        "featured_models": DEFAULT_FEATURED_MODELS
     }
 
 @app.post("/api/models/load")
@@ -237,15 +283,25 @@ def load_model_endpoint(req: LoadModelRequest):
                 processor = AutoProcessor.from_pretrained(model_source, trust_remote_code=True)
                 model = AutoModelForVision2Seq.from_pretrained(model_source, **load_kwargs)
                 tokenizer = processor.tokenizer
+        elif "ocr" in repo_id.lower() or "unlimited" in repo_id.lower():
+            # OCR / VLM Foundation Model (e.g., baidu/Unlimited-OCR, DeepSeek-OCR)
+            from transformers import AutoModel
+            tokenizer = AutoTokenizer.from_pretrained(model_source, trust_remote_code=True)
+            model = AutoModel.from_pretrained(model_source, **load_kwargs)
         else:
             tokenizer = AutoTokenizer.from_pretrained(model_source, trust_remote_code=True)
-            model = AutoModelForCausalLM.from_pretrained(model_source, **load_kwargs)
+            try:
+                model = AutoModelForCausalLM.from_pretrained(model_source, **load_kwargs)
+            except Exception:
+                # Fallback to AutoModel if CausalLM header fails
+                from transformers import AutoModel
+                model = AutoModel.from_pretrained(model_source, **load_kwargs)
 
         with state_lock:
             CURRENT_MODEL = model
             CURRENT_TOKENIZER = tokenizer
             CURRENT_PROCESSOR = processor
-            IS_VISION_MODEL = is_vl
+            IS_VISION_MODEL = is_vl or ("ocr" in repo_id.lower())
             ACTIVE_MODEL_NAME = repo_id
 
         return {
@@ -284,7 +340,7 @@ def delete_model_endpoint(folder_name: str):
 # Hugging Face Hub Endpoints
 # ---------------------------------------------------------------------------
 @app.get("/api/hf/search")
-def search_hf_endpoint(q: str, task: str = "text-generation", limit: int = 15):
+def search_hf_endpoint(q: str, task: str = "all", limit: int = 15):
     if not q or not q.strip():
         return {"results": []}
     try:

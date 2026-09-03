@@ -5,8 +5,16 @@ import {
 } from 'lucide-react';
 import { getApiBase } from '../config';
 
-// Featured & Recommended 1-Click Models optimized for T4 GPU
-const FEATURED_MODELS = [
+// Fallback Recommended Models if backend is offline
+const DEFAULT_FALLBACK_MODELS = [
+  {
+    id: "baidu/Unlimited-OCR",
+    name: "Baidu Unlimited-OCR (Long-Horizon Document)",
+    badge: "📄 ৪০+ পেজ ১-শট OCR",
+    badgeColor: "bg-cyan-500/10 text-cyan-400 border-cyan-500/30",
+    desc: "বই, প্রশ্নব্যাংক ও মাল্টি-পেজ ডকুমেন্ট এক ক্লিকে নির্ভুল টেক্সট ও কলামসহ পার্স করার জন্য আল্ট্রা-ফাস্ট মডেল।",
+    vram: "~6.0 GB VRAM"
+  },
   {
     id: "unsloth/Qwen2.5-VL-7B-Instruct-bnb-4bit",
     name: "Qwen 2.5 VL (7B Vision & Layout)",
@@ -50,8 +58,11 @@ export default function ModelHubModal({
 }) {
   const [tab, setTab] = useState("downloaded"); // 'downloaded' or 'search'
   const [downloadedModels, setDownloadedModels] = useState([]);
+  const [featuredModels, setFeaturedModels] = useState(DEFAULT_FALLBACK_MODELS);
+  const [customLoadRepoId, setCustomLoadRepoId] = useState("");
   const [quantization, setQuantization] = useState("4bit");
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingModelId, setLoadingModelId] = useState(null);
   const [statusMessage, setStatusMessage] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState([]);
@@ -72,6 +83,9 @@ export default function ModelHubModal({
       if (res.ok) {
         const data = await res.json();
         setDownloadedModels(data.downloaded_models || []);
+        if (data.featured_models && Array.isArray(data.featured_models) && data.featured_models.length > 0) {
+          setFeaturedModels(data.featured_models);
+        }
       }
     } catch (err) {
       console.error("Failed to fetch models", err);
@@ -80,7 +94,8 @@ export default function ModelHubModal({
 
   const handleLoadModel = async (repoId) => {
     setIsLoading(true);
-    setStatusMessage({ type: 'info', text: `মডেল '${repoId}' লোড হচ্ছে (${quantization.toUpperCase()} মোড)...` });
+    setLoadingModelId(repoId);
+    setStatusMessage({ type: 'info', text: `মডেল '${repoId}' লোড হচ্ছে (${quantization.toUpperCase()} মোড)... এটি ১-২ মিনিট সময় নিতে পারে।` });
 
     try {
       const apiBase = getApiBase();
@@ -95,10 +110,12 @@ export default function ModelHubModal({
 
       setStatusMessage({ type: 'success', text: `🎉 সফলভাবে লোড হয়েছে: ${repoId}` });
       onModelChanged(repoId);
+      fetchDownloadedModels();
     } catch (err) {
       setStatusMessage({ type: 'error', text: `❌ লোড এরর: ${err.message}` });
     } finally {
       setIsLoading(false);
+      setLoadingModelId(null);
     }
   };
 
@@ -110,6 +127,7 @@ export default function ModelHubModal({
       if (res.ok) {
         setStatusMessage({ type: 'success', text: "✅ মেমরি সম্পূর্ণ খালি করা হয়েছে (VRAM Cleared)।" });
         onModelChanged("None");
+        fetchDownloadedModels();
       }
     } catch (err) {
       setStatusMessage({ type: 'error', text: `এরর: ${err.message}` });
@@ -133,18 +151,25 @@ export default function ModelHubModal({
   };
 
   const handleSearchHf = async (e) => {
-    e.preventDefault();
+    if (e) e.preventDefault();
     if (!searchQuery.trim()) return;
     setIsSearching(true);
+    setStatusMessage(null);
     try {
       const apiBase = getApiBase();
-      const res = await fetch(`${apiBase}/api/hf/search?q=${encodeURIComponent(searchQuery)}&limit=10`);
+      const res = await fetch(`${apiBase}/api/hf/search?q=${encodeURIComponent(searchQuery)}&limit=15`);
       if (res.ok) {
         const data = await res.json();
         setSearchResults(data.results || []);
+        if ((data.results || []).length === 0) {
+          setStatusMessage({ type: 'info', text: `'${searchQuery}'-এর জন্য কোনো মডেল পাওয়া যায়নি। সরাসরি Repo ID দিয়ে ডাউনলোড করতে পারেন।` });
+        }
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || `Server error ${res.status}`);
       }
     } catch (err) {
-      console.error(err);
+      setStatusMessage({ type: 'error', text: `সার্চ এরর: ${err.message}` });
     } finally {
       setIsSearching(false);
     }
@@ -154,7 +179,7 @@ export default function ModelHubModal({
     const targetId = repoId || downloadRepoId;
     if (!targetId.trim()) return;
     setIsDownloading(true);
-    setStatusMessage({ type: 'info', text: `মডেল ডাউনলোড শুরু হয়েছে: ${targetId}...` });
+    setStatusMessage({ type: 'info', text: `মডেল ডাউনলোড শুরু হয়েছে: ${targetId}... Hugging Face থেকে ডাউনলোড হতে কিছুক্ষণ সময় লাগবে।` });
 
     try {
       const apiBase = getApiBase();
@@ -272,6 +297,34 @@ export default function ModelHubModal({
               )}
             </div>
 
+            {/* Direct Model Repo ID Load Bar */}
+            <div className="p-3 bg-[#171717] border border-[#2b2b2b] rounded-xl flex items-center gap-2">
+              <input
+                type="text"
+                placeholder="যেকোনো HuggingFace Repo ID দিন (যেমন: baidu/Unlimited-OCR বা Qwen/Qwen2.5-3B)"
+                value={customLoadRepoId}
+                onChange={e => setCustomLoadRepoId(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && customLoadRepoId.trim()) {
+                    handleLoadModel(customLoadRepoId.trim());
+                  }
+                }}
+                className="flex-1 bg-transparent text-xs text-white placeholder-neutral-500 focus:outline-none font-mono"
+              />
+              <button
+                onClick={() => handleLoadModel(customLoadRepoId.trim())}
+                disabled={isLoading || !customLoadRepoId.trim()}
+                className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium flex items-center gap-1.5 transition-all shrink-0 disabled:opacity-50"
+              >
+                {loadingModelId === customLoadRepoId.trim() ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Zap className="w-3.5 h-3.5" />
+                )}
+                <span>সরাসরি লোড</span>
+              </button>
+            </div>
+
             {/* Featured / Recommended Models */}
             <div className="space-y-3">
               <div className="flex items-center justify-between text-xs text-neutral-400 px-1 font-medium">
@@ -283,7 +336,7 @@ export default function ModelHubModal({
               </div>
 
               <div className="grid grid-cols-1 gap-2.5">
-                {FEATURED_MODELS.map(fm => {
+                {featuredModels.map(fm => {
                   const isActive = activeModel === fm.id;
                   return (
                     <div
@@ -326,8 +379,14 @@ export default function ModelHubModal({
                               : "bg-emerald-600 hover:bg-emerald-500 text-white shadow-md hover:scale-[1.02]"
                           }`}
                         >
-                          {isLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5 fill-current" />}
-                          <span>{isActive ? "রানিং আছে" : "লোড করুন (Load)"}</span>
+                          {loadingModelId === fm.id ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Zap className="w-3.5 h-3.5 fill-current" />
+                          )}
+                          <span>
+                            {isActive ? "রানিং আছে" : loadingModelId === fm.id ? "লোড হচ্ছে..." : "লোড করুন (Load)"}
+                          </span>
                         </button>
                       </div>
                     </div>
@@ -346,6 +405,7 @@ export default function ModelHubModal({
                 <div className="space-y-2">
                   {downloadedModels.map(m => {
                     const isActive = activeModel === m.id;
+                    const isCurrentLoading = loadingModelId === m.id;
                     return (
                       <div
                         key={m.folder}
@@ -376,8 +436,12 @@ export default function ModelHubModal({
                                 : "bg-sky-600 hover:bg-sky-500 text-white"
                             }`}
                           >
-                            <Zap className="w-3.5 h-3.5" />
-                            <span>{isActive ? "রানিং" : "চালান"}</span>
+                            {isCurrentLoading ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Zap className="w-3.5 h-3.5" />
+                            )}
+                            <span>{isActive ? "রানিং" : isCurrentLoading ? "লোড হচ্ছে..." : "চালান"}</span>
                           </button>
                           <button
                             onClick={() => handleDeleteModel(m.folder)}
@@ -437,6 +501,26 @@ export default function ModelHubModal({
               </button>
             </div>
 
+            {/* Quick Search Tag Suggestions */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[10px] text-neutral-500">জনপ্রিয় সার্চ:</span>
+              {["baidu/Unlimited-OCR", "Qwen2.5-VL", "DeepSeek", "Bangla", "Llama-3"].map(tag => (
+                <button
+                  key={tag}
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery(tag);
+                    setTimeout(() => {
+                      setSearchQuery(tag);
+                    }, 50);
+                  }}
+                  className="text-[10px] bg-[#1f1f1f] hover:bg-[#2a2a2a] text-neutral-400 hover:text-white px-2 py-0.5 rounded-full border border-[#333] transition-colors"
+                >
+                  {tag}
+                </button>
+              ))}
+            </div>
+
             {/* Search Results */}
             <div className="space-y-2 pt-1">
               <div className="text-[11px] font-semibold text-neutral-500 uppercase tracking-wider">সার্চ ফলাফল</div>
@@ -445,25 +529,57 @@ export default function ModelHubModal({
                   {isSearching ? "মডেল খোঁজা হচ্ছে..." : "কোনো মডেল সার্চ করতে উপরের বক্সে লিখুন।"}
                 </div>
               ) : (
-                searchResults.map(res => (
-                  <div key={res.id} className="p-3 rounded-xl bg-[#171717] border border-[#2b2b2b] flex items-center justify-between gap-4">
-                    <div className="min-w-0">
-                      <div className="font-semibold text-xs text-white truncate">{res.id}</div>
-                      <div className="text-[10px] text-neutral-400 mt-0.5">
-                        ডাউনলোড: {res.downloads.toLocaleString()} | লাইক: {res.likes.toLocaleString()}
+                searchResults.map(res => {
+                  const isActive = activeModel === res.id;
+                  const isCurrentLoading = loadingModelId === res.id;
+                  return (
+                    <div key={res.id} className="p-3 rounded-xl bg-[#171717] border border-[#2b2b2b] flex items-center justify-between gap-4">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-xs text-white truncate">{res.id}</span>
+                          {isActive && (
+                            <span className="bg-emerald-500/20 text-emerald-400 text-[10px] font-mono px-2 py-0.5 rounded-full">
+                              Active
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-neutral-400 mt-0.5">
+                          ডাউনলোড: {res.downloads.toLocaleString()} | লাইক: {res.likes.toLocaleString()}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          onClick={() => handleLoadModel(res.id)}
+                          disabled={isLoading || isActive}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1 transition-all ${
+                            isActive
+                              ? "bg-neutral-800 text-neutral-500"
+                              : "bg-emerald-600 hover:bg-emerald-500 text-white"
+                          }`}
+                          title="সরাসরি লোড করুন"
+                        >
+                          {isCurrentLoading ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Zap className="w-3.5 h-3.5" />
+                          )}
+                          <span>{isActive ? "রানিং" : "লোড"}</span>
+                        </button>
+
+                        <button
+                          onClick={() => handleDownloadHf(res.id)}
+                          disabled={isDownloading}
+                          className="px-2.5 py-1.5 rounded-lg bg-[#282828] hover:bg-sky-600 hover:text-white text-neutral-300 text-xs font-medium flex items-center gap-1 transition-all"
+                          title="ডিস্কে ডাউনলোড করে রাখুন"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>ডাউনলোড</span>
+                        </button>
                       </div>
                     </div>
-
-                    <button
-                      onClick={() => handleDownloadHf(res.id)}
-                      disabled={isDownloading}
-                      className="px-3 py-1.5 rounded-lg bg-[#282828] hover:bg-emerald-600 hover:text-white text-neutral-300 text-xs font-medium flex items-center gap-1.5 transition-all shrink-0"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>ডাউনলোড</span>
-                    </button>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>

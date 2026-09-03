@@ -12,7 +12,7 @@ SERVER_PORT = int(os.environ.get("SERVER_PORT", 8000))
 
 # Cloudflare Configuration
 CLOUDFLARE_TUNNEL_TOKEN = os.environ.get("CLOUDFLARE_TUNNEL_TOKEN", "eyJhIjoiMGE2ODA2NzA2MzI0N2Q1ZGU5NzJkZGUzNWIwZmI0NWUiLCJ0IjoiOGRjNGZiNDUtZDc1Mi00NmViLWE4YWYtY2UxM2MyYzA4MzY3IiwicyI6Ik1HUTFaR0ZoWkRFdFpqSXhOeTAwTUdFeExUbGxabU10TjJNNE1HVmxNelptTmpkbSJ9")
-DOMAIN = "colabapi.lunisphere.com"
+DOMAIN = "colabapi.iunisphere.com"
 
 # Hardware / GPU Defaults
 DEFAULT_QUANTIZATION = "4bit"  # Options: '4bit', '8bit', 'fp16'

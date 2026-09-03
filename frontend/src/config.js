@@ -1,5 +1,5 @@
 // Default Colab Cloudflare API Endpoint
-export const DEFAULT_API_BASE = "https://colabapi.lunisphere.com";
+export const DEFAULT_API_BASE = "https://colabapi.iunisphere.com";
 
 export function getApiBase() {
   return localStorage.getItem("colab_api_base") || DEFAULT_API_BASE;

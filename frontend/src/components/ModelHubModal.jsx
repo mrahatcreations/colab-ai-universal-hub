@@ -16,12 +16,12 @@ const DEFAULT_FALLBACK_MODELS = [
     vram: "~6.0 GB VRAM"
   },
   {
-    id: "unsloth/Qwen2.5-VL-7B-Instruct-bnb-4bit",
-    name: "Qwen 2.5 VL (7B Vision & Layout)",
-    badge: "🌟 ২-কলাম বই ও ভিশন",
+    id: "Qwen/Qwen2.5-VL-3B-Instruct",
+    name: "Qwen 2.5 VL (3B Vision & Layout)",
+    badge: "🌟 ২-কলাম বই ও ভিশন (অফিসিয়াল)",
     badgeColor: "bg-emerald-500/10 text-emerald-400 border-emerald-500/30",
     desc: "বইয়ের ২-কলাম পেজ, চার্ট ও বাংলা যুক্তবর্ণ সরাসরি ছবি দেখে নির্ভুলভাবে পড়ার জন্য এক নম্বর ভিশন মডেল।",
-    vram: "~5.5 GB VRAM"
+    vram: "~6.8 GB VRAM"
   },
   {
     id: "unsloth/Qwen2.5-7B-Instruct-bnb-4bit",

@@ -296,9 +296,27 @@ def load_model_endpoint(req: LoadModelRequest):
                 tokenizer = processor.tokenizer
         elif "ocr" in repo_id.lower() or "unlimited" in repo_id.lower():
             # OCR / VLM Foundation Model (e.g., baidu/Unlimited-OCR, DeepSeek-OCR)
-            from transformers import AutoModel
+            from transformers import AutoModel, AutoConfig
             tokenizer = AutoTokenizer.from_pretrained(model_source, trust_remote_code=True)
-            model = AutoModel.from_pretrained(model_source, **load_kwargs)
+            
+            # Baidu Unlimited-OCR requires bfloat16/safetensors and pad_token_id on config
+            ocr_config = AutoConfig.from_pretrained(model_source, trust_remote_code=True)
+            pad_id = getattr(tokenizer, "pad_token_id", None) or getattr(tokenizer, "eos_token_id", 0) or 0
+            if not hasattr(ocr_config, "pad_token_id") or ocr_config.pad_token_id is None:
+                ocr_config.pad_token_id = pad_id
+
+            ocr_load_kwargs = {
+                "config": ocr_config,
+                "trust_remote_code": True,
+                "use_safetensors": True,
+            }
+            if torch.cuda.is_available():
+                ocr_load_kwargs["torch_dtype"] = torch.bfloat16
+                ocr_load_kwargs["device_map"] = "auto"
+
+            model = AutoModel.from_pretrained(model_source, **ocr_load_kwargs)
+            if hasattr(model, "eval"):
+                model = model.eval()
         else:
             tokenizer = AutoTokenizer.from_pretrained(model_source, trust_remote_code=True)
             try:
@@ -537,7 +555,55 @@ async def vision_ocr_endpoint(
         "7. PURE CLEAN OUTPUT:\n"
         "   - Output ONLY the finished Markdown text. Do NOT output any internal chain-of-thought, conversation, or meta-notes."
     )
-    user_prompt = prompt.strip() if prompt and prompt.strip() else default_prompt
+    # Special case: Baidu Unlimited-OCR has custom .infer() method
+    if hasattr(CURRENT_MODEL, "infer"):
+        try:
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_img:
+                image.save(tmp_img.name)
+                tmp_img_path = tmp_img.name
+
+            out_tmp_dir = tempfile.mkdtemp(prefix="unlimited_ocr_")
+            CURRENT_MODEL.infer(
+                CURRENT_TOKENIZER,
+                prompt=f"<image>{user_prompt}",
+                image_file=tmp_img_path,
+                output_path=out_tmp_dir,
+                base_size=1024,
+                image_size=640,
+                crop_mode=True,
+                max_length=32768,
+                save_results=True
+            )
+
+            # Read result
+            extracted_output = ""
+            for fname in os.listdir(out_tmp_dir):
+                if fname.endswith((".txt", ".md", ".json")):
+                    with open(os.path.join(out_tmp_dir, fname), "r", encoding="utf-8") as f:
+                        extracted_output += f.read()
+
+            try:
+                os.remove(tmp_img_path)
+                shutil.rmtree(out_tmp_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+            async def sse_direct_stream():
+                chunk_size = 20
+                for i in range(0, len(extracted_output), chunk_size):
+                    chunk = extracted_output[i:i+chunk_size]
+                    yield f"data: {json.dumps({'token': chunk})}\n\n"
+                    await asyncio.sleep(0.01)
+                yield f"data: [DONE]\n\n"
+
+            return StreamingResponse(
+                sse_direct_stream(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"}
+            )
+        except Exception as ocr_e:
+            raise HTTPException(status_code=500, detail=f"Unlimited-OCR inference error: {str(ocr_e)}")
 
     messages = [
         {

@@ -21,13 +21,29 @@ try:
     # Monkey patch PretrainedConfig so missing config attributes on custom models (Baidu/DeepSeek) never crash
     from transformers.configuration_utils import PretrainedConfig
     _orig_getattr = getattr(PretrainedConfig, "__getattr__", None)
+    _DEFAULTS = {
+        "attention_dropout": 0.0,
+        "attention_bias": False,
+        "pad_token_id": 0,
+        "bos_token_id": 1,
+        "eos_token_id": 2,
+        "sliding_window": None,
+        "max_window_layers": None,
+        "rope_scaling": None,
+        "partial_rotary_factor": 1.0,
+        "use_cache": True,
+    }
     def _safe_config_getattr(self, key):
-        if key == "attention_dropout":
-            return 0.0
-        if key == "pad_token_id":
-            return 0
+        if key in _DEFAULTS:
+            return _DEFAULTS[key]
         if _orig_getattr:
-            return _orig_getattr(self, key)
+            try:
+                return _orig_getattr(self, key)
+            except AttributeError:
+                pass
+        # If it starts with attention_ or is a common transformer parameter, return None or False
+        if key.startswith("attention_"):
+            return None
         raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{key}'")
     PretrainedConfig.__getattr__ = _safe_config_getattr
 except Exception as _patch_e:

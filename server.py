@@ -9,6 +9,17 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 import torch
+# Transformers backwards-compatibility shim for custom model architectures
+try:
+    import transformers.utils.import_utils as _tf_import_utils
+    if not hasattr(_tf_import_utils, "is_torch_fx_available"):
+        _tf_import_utils.is_torch_fx_available = lambda: False
+    import transformers.utils as _tf_utils
+    if not hasattr(_tf_utils, "is_torch_fx_available"):
+        _tf_utils.is_torch_fx_available = lambda: False
+except Exception:
+    pass
+
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse, Response

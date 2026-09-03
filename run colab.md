@@ -29,7 +29,7 @@ CLOUDFLARE_TOKEN = "eyJhIjoiMGE2ODA2NzA2MzI0N2Q1ZGU5NzJkZGUzNWIwZmI0NWUiLCJ0Ijoi
 # ৪. ভিশন, আনলিমিটেড-ওসিআর ও সার্ভার ডিপেন্ডেন্সি ইনস্টল
 print("⏳ প্রয়োজনীয় লাইব্রেরি ইনস্টল হচ্ছে (১-২ মিনিট সময় লাগবে)...")
 !pip install -q \
-    "transformers>=4.48.0" \
+    "transformers>=4.48.0,<5.0.0" \
     torchvision accelerate bitsandbytes \
     qwen-vl-utils einops addict easydict pymupdf psutil \
     fastapi uvicorn pydantic python-multipart nest_asyncio \

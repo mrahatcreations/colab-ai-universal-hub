@@ -1,4 +1,4 @@
-﻿# 🚀 Colab AI Universal Hub — 1-Click Run Guide
+# 🚀 Colab AI Universal Hub — 1-Click Run Guide
 
 Google Colab (T4 বা A100 GPU)-এ সম্পূর্ণ ব্যাকএন্ড, Cloudflare Zero Trust টানেল এবং Baidu Unlimited-OCR / Qwen2.5-VL স্বয়ংক্রিয়ভাবে বুট করার জন্য নিচের কোডটি একটি কোড সেলে পেস্ট করে চালান।
 
@@ -42,7 +42,7 @@ os.environ["AUTO_LOAD_MODEL"] = "baidu/Unlimited-OCR"
 # ৬. সার্ভার ও ক্লাউডফ্লেয়ার টানেল চালু
 print("\n" + "="*65)
 print("🚀 সার্ভার ও ক্লাউডফ্লেয়ার টানেল চালু হচ্ছে...")
-print("👉 লাইভ ডোমেইন: https://colabapi.iunisphere.com")
+print("👉 লাইভ ডোমেইন: https://colabapi.lunisphere.com")
 print("="*65 + "\n")
 
 !python run_tunnel.py

@@ -62,7 +62,7 @@ export default function SettingsModal({ isOpen, onClose, onApiChanged }) {
               type="text"
               value={url}
               onChange={e => setUrl(e.target.value)}
-              placeholder="https://colabapi.iunisphere.com"
+              placeholder="https://colabapi.lunisphere.com"
               className="w-full bg-[#141414] border border-[#333] rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 font-mono"
             />
           </div>

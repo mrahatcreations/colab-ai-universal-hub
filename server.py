@@ -996,6 +996,18 @@ async def ocr_single_page_endpoint(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Page OCR failed: {str(e)}")
 
+@app.post("/api/admin/pull_and_restart")
+def pull_and_restart():
+    """Pulls latest git commits and restarts the server process in-place."""
+    def _restart():
+        time.sleep(1)
+        subprocess.run("git fetch --all && git reset --hard origin/main", shell=True, cwd="/content/colab-api")
+        # Restart process
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    threading.Thread(target=_restart).start()
+    return {"status": "success", "message": "Pulling latest code and restarting server..."}
+
 if __name__ == "__main__":
     import uvicorn
     from config import SERVER_HOST, SERVER_PORT
